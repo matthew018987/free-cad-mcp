@@ -1,0 +1,4 @@
+[
+  {"id": "length", "type": "bbox", "object": "Shaft", "max": [20.01, 20.01, 48.01], "min": [19.99, 19.99, 47.99]},
+  {"id": "pin-through", "type": "hole_count", "holes": "Shaft.holes(d=3)", "count": 1}
+]

@@ -1,0 +1,20 @@
+{
+  "motor_flange":   {"value": 42.3, "unit": "mm", "source": "NEMA 17 datasheet (17HS4401) p1: flange 42.3 sq"},
+  "motor_hole_pitch": {"value": 31.0, "unit": "mm", "source": "NEMA 17 datasheet p1: 31±0.1 SQUARE pattern (not a PCD)"},
+  "motor_pilot_d":  {"value": 22.0, "unit": "mm", "source": "NEMA 17 datasheet p1: pilot Ø22 -0.05"},
+  "motor_pilot_h":  {"value": 2.0,  "unit": "mm", "source": "NEMA 17 datasheet p1"},
+  "motor_length":   {"value": 40.0, "unit": "mm", "source": "17HS4401 body length 40"},
+  "shaft_d":        {"value": 5.0,  "unit": "mm", "source": "NEMA 17 datasheet p1"},
+  "shaft_len":      {"value": 24.0, "unit": "mm", "source": "NEMA 17 datasheet p1"},
+  "pilot_clear":    {"value": 0.5,  "unit": "mm", "source": "assumption: FDM diametral clearance on the pilot"},
+  "axis_z":         {"value": 25.0, "unit": "mm", "source": "requirement: motor body ≥ 1 mm above the frame (21.15 + 1, rounded up)"},
+  "plate_w":        {"value": 50.0, "unit": "mm", "source": "flange 42.3 + 2 × ~3.9 margin"},
+  "plate_h":        {"value": 50.0, "unit": "mm", "source": "axis_z + 21.15 + ~3.9 margin"},
+  "wall":           {"value": 5.0,  "unit": "mm", "source": "assumption: FDM stiffness, ≥ 2 mm min wall"},
+  "base_depth":     {"value": 35.0, "unit": "mm", "source": "requirement: two M4 frame screws behind the plate"},
+  "frame_screw_x":  {"value": 17.0, "unit": "mm", "source": "requirement: frame slot spacing 34"},
+  "frame_screw_y":  {"value": 22.0, "unit": "mm", "source": "base_depth centre, clear of gussets"},
+  "gusset":         {"value": 20.0, "unit": "mm", "source": "assumption"},
+  "gusset_t":       {"value": 4.0,  "unit": "mm", "source": "assumption"},
+  "corner":         {"value": 3.0,  "unit": "mm", "source": "assumption: outer corner radius"}
+}

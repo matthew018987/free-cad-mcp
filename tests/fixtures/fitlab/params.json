@@ -1,0 +1,5 @@
+{"plate_t": {"value": 5, "unit": "mm", "source": "test fixture"},
+ "bore_d": {"value": 10, "unit": "mm", "source": "test fixture"},
+ "shaft_d": {"value": 9.8, "unit": "mm", "source": "test fixture"},
+ "pattern": {"value": 31, "unit": "mm", "source": "test fixture"},
+ "pattern_err": {"value": 0.03, "unit": "mm", "source": "deliberate offset"}}

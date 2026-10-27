@@ -1,0 +1,12 @@
+{
+  "name": "turned_shaft",
+  "description": "Stepped drive shaft: Ø20 collar, Ø12 k6 bearing seat, M8 threaded end.",
+  "units": "mm",
+  "process": "turning",
+  "material": {"name": "Stainless steel 303", "density_g_cm3": 8.0},
+  "clearance": {"default_min_mm": 0.1},
+  "drawing": {"standard": "ISO", "projection": "first-angle", "general_tolerance": "ISO 2768-m"},
+  "title_block": {"author": "", "company": "", "drawing_number": "TS-001"},
+  "parts": {"Shaft": {"process": "turning", "material": "Stainless steel 303", "finish": "as machined, Ra 1.6 on Ø12 seat", "qty": 4}},
+  "exports": ["step"]
+}

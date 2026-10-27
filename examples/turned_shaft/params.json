@@ -1,0 +1,10 @@
+{
+  "collar_d":  {"value": 20, "unit": "mm", "source": "requirement: shoulder for the bearing"},
+  "collar_l":  {"value": 6,  "unit": "mm", "source": "requirement"},
+  "seat_d":    {"value": 12, "unit": "mm", "source": "bearing 6001 bore Ø12 (k6 seat)"},
+  "seat_l":    {"value": 28, "unit": "mm", "source": "bearing width 8 + spacer 20"},
+  "thread_d":  {"value": 8,  "unit": "mm", "source": "M8 nut retention"},
+  "thread_l":  {"value": 14, "unit": "mm", "source": "nut 6.5 + washer 1.6 + margin"},
+  "chamfer":   {"value": 0.5, "unit": "mm", "source": "general turning chamfer"},
+  "pin_d":     {"value": 3, "unit": "mm", "source": "cross hole for a Ø3 roll pin"}
+}

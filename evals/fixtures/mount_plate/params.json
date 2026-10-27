@@ -1,0 +1,5 @@
+{"width": {"value": 70, "unit": "mm", "source": "user"},
+ "depth": {"value": 45, "unit": "mm", "source": "user"},
+ "thickness": {"value": 5, "unit": "mm", "source": "user"},
+ "pitch_x": {"value": 50, "unit": "mm", "source": "user"},
+ "pitch_y": {"value": 30, "unit": "mm", "source": "user"}}

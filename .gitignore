@@ -1,0 +1,23 @@
+# python
+__pycache__/
+*.py[cod]
+
+# FreeCAD MCP generated files
+*.bak
+*.FCBak
+.history/
+examples/*/build/
+examples/*/out/
+examples/*/drawings/
+examples/*/release/
+*.FCStd1
+
+# built by tools/build_plugin.py (plugin zip, .mcpb, eval results)
+dist/
+
+# macOS
+.DS_Store
+
+# Claude Code local state
+.claude/*.lock
+.claude/settings.local.json

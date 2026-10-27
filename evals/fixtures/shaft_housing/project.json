@@ -1,0 +1,3 @@
+{"name": "shaft_housing", "description": "Bearing-less housing for the customer's Ø20 shaft.", "units": "mm",
+ "process": "cnc", "material": {"name": "Aluminium 6082-T6", "density_g_cm3": 2.7},
+ "clearance": {"default_min_mm": 0.1}, "parts": {"Housing": {"process": "cnc", "qty": 1}}}

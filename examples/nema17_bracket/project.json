@@ -1,0 +1,39 @@
+{
+  "name": "nema17_bracket",
+  "description": "L-bracket that mounts a NEMA 17 stepper to a flat frame with two M4 screws.",
+  "units": "mm",
+  "process": "fdm",
+  "material": {
+    "name": "PETG",
+    "density_g_cm3": 1.27
+  },
+  "clearance": {
+    "default_min_mm": 0.3
+  },
+  "dfm": {
+    "hole_compensation_mm": 0.2
+  },
+  "drawing": {
+    "standard": "ISO",
+    "projection": "first-angle",
+    "general_tolerance": "ISO 2768-m",
+    "template": "A3_Landscape_ISO5457_minimal"
+  },
+  "title_block": {
+    "author": "",
+    "company": "",
+    "drawing_number": "NB-001"
+  },
+  "exports": [
+    "step",
+    "3mf"
+  ],
+  "parts": {
+    "Bracket": {
+      "process": "fdm",
+      "material": "PETG",
+      "finish": "",
+      "qty": 1
+    }
+  }
+}

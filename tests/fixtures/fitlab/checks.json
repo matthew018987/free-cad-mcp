@@ -1,0 +1,14 @@
+[
+  {"id": "no-overlap-AB",   "type": "interference", "a": "BlockA", "b": "BlockB", "max": 0},
+  {"id": "gap-ok",          "type": "clearance", "a": "GapA", "b": "GapB", "min": 1.5},
+  {"id": "gap-too-small",   "type": "clearance", "a": "GapA", "b": "GapB", "min": 2.5},
+  {"id": "shaft-radial",    "type": "radial_gap", "a": "Plate.holes(d=10)", "b": "Shaft", "min": 0.05},
+  {"id": "pattern-loose",   "type": "align", "a": "Plate.holes(d=3.4)", "b": "Flange.holes(d=2.5)", "max_offset": 0.05},
+  {"id": "pattern-tight",   "type": "align", "a": "Plate.holes(d=3.4)", "b": "Flange.holes(d=2.5)", "max_offset": 0.01},
+  {"id": "shaft-coaxial",   "type": "coaxial", "a": "Plate.holes(d=10)", "b": "Shaft"},
+  {"id": "link-height",     "type": "min_z", "object": "LinkedBox", "min": 149.99},
+  {"id": "plate-envelope",  "type": "bbox", "object": "Plate", "max": [41, 41, 6]},
+  {"id": "plate-mass",      "type": "mass", "object": "Plate", "max_g": 10},
+  {"id": "plate-holes",     "type": "hole_count", "holes": "Plate.holes(d=3.4)", "count": 4},
+  {"id": "flange-seat",     "type": "clearance", "a": "Plate", "b": "Flange", "min": 0.3, "contact_ok": true}
+]

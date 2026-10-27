@@ -1,0 +1,2 @@
+[{"id": "shaft-free", "type": "interference", "a": "Housing", "b": "Shaft", "max": 0,
+  "note": "the shaft must turn freely in the bore"}]

@@ -1,0 +1,9 @@
+{"pcb_w": {"value": 50, "unit": "mm", "source": "PCB drawing"},
+ "pcb_d": {"value": 40, "unit": "mm", "source": "PCB drawing"},
+ "pcb_z": {"value": 8, "unit": "mm", "source": "standoff height in the base (fixed)"},
+ "comp_h": {"value": 8, "unit": "mm", "source": "tallest component (electrolytic capacitor) above the board"},
+ "lid_w": {"value": 70, "unit": "mm", "source": "base outline"},
+ "lid_d": {"value": 60, "unit": "mm", "source": "base outline"},
+ "lid_z": {"value": 22, "unit": "mm", "source": "base wall height"},
+ "lid_t": {"value": 3, "unit": "mm", "source": "assumption"},
+ "boss_len": {"value": 10, "unit": "mm", "source": "first guess"}}

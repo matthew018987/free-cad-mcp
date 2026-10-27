@@ -1,0 +1,1957 @@
+{
+ "generic_rubric": [
+  "Every driving dimension is traceable: params.json values carry a source (user, datasheet page, standard, or a stated assumption) and nothing important is invented.",
+  "Fit, clearance or alignment claims are backed by numbers from check_fit / measure / section / checks.json, not by looking at a render.",
+  "The build report was read: no failed features, invalid solids or failing checks are left unexplained.",
+  "The final message tells the user plainly what was made and verified, the key numbers, assumptions made, and (when released) where the package is and what to send to which supplier."
+ ],
+ "generic_focus": [
+  "trace",
+  "trace",
+  "trace",
+  "last_message"
+ ],
+ "cases": [
+  {
+   "id": "nema17_print",
+   "title": "FDM motor mount from a datasheet",
+   "prompt": "Attached is the datasheet for my NEMA 17 motor (inbox/nema17_datasheet.md). Design a 3D-printed bracket that holds it with the shaft horizontal, on top of a 2020 aluminium extrusion: the bracket's base sits on the extrusion's top face and is held by two M5 screws into T-nuts, 20 mm apart along the extrusion, on the extrusion's centreline. The motor body must clear the extrusion's top face by at least 2 mm. PETG, FDM, quantity 2. Use the project name `motor_mount`. When it is verified, prepare everything for the print service.",
+   "inbox": "inbox/nema17_print",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "motor_mount"
+    },
+    {
+     "type": "acceptance_checks",
+     "project": "motor_mount",
+     "min_count": 3,
+     "all_pass": true
+    },
+    {
+     "type": "checks_json_has",
+     "project": "motor_mount",
+     "types_any": [
+      "align",
+      "coaxial"
+     ]
+    },
+    {
+     "type": "checks_json_has",
+     "project": "motor_mount",
+     "why": "the 2 mm motor-above-extrusion requirement is an acceptance check",
+     "types_any": [
+      "clearance",
+      "radial_gap",
+      "distance",
+      "bound",
+      "min_x",
+      "max_x",
+      "min_y",
+      "max_y",
+      "min_z",
+      "max_z"
+     ]
+    },
+    {
+     "type": "report_regex",
+     "project": "motor_mount",
+     "regex": "\\bref\\b",
+     "why": "the motor is modelled as a reference part"
+    },
+    {
+     "type": "params_with_source",
+     "project": "motor_mount",
+     "min": 4
+    },
+    {
+     "type": "param_value_any",
+     "project": "motor_mount",
+     "value": 31.0,
+     "tol": 0.001,
+     "why": "31 mm square pattern from the datasheet"
+    },
+    {
+     "type": "geometry",
+     "project": "motor_mount",
+     "why": "4 M3-clearance holes on a 31 mm square (not a 31 mm bolt circle)",
+     "code": "import analysis as an, itertools\nok=False\nfor o in an.results(doc):\n    if an.role(o)=='ref': continue\n    hs=[h for h in an.detect_holes(an.global_shape(o)) if 3.1<=min(h['diameters'])<=3.8]\n    for quad in itertools.combinations(hs,4):\n        ds=sorted((a['point']-b['point']-a['axis']*(a['point']-b['point']).dot(a['axis'])).Length for a,b in itertools.combinations(quad,2))\n        if all(abs(d-31.0)<0.05 for d in ds[:4]) and all(abs(d-43.84)<0.06 for d in ds[4:]): ok=True\nfc.result(ok=ok)"
+    },
+    {
+     "type": "any_of",
+     "why": "standard clearances from lookup_standard, fc.std or fclib spec strings (not from memory)",
+     "checks": [
+      {
+       "type": "tool_called",
+       "tool": "lookup_standard",
+       "min": 1
+      },
+      {
+       "type": "file_regex",
+       "path": "motor_mount/model.py",
+       "regex": "fc\\.std\\.|M[35] clearance"
+      }
+     ]
+    },
+    {
+     "type": "tool_called_any",
+     "tools": [
+      "check_fit",
+      "measure",
+      "section"
+     ],
+     "min": 1
+    },
+    {
+     "type": "tool_called",
+     "tool": "check_manufacturing",
+     "min": 1
+    },
+    {
+     "type": "tool_called",
+     "tool": "release",
+     "min": 1
+    },
+    {
+     "type": "tool_not_called_with",
+     "tool": "release",
+     "args": [
+      "allow_failing_checks",
+      "allow_dfm_errors"
+     ]
+    },
+    {
+     "type": "zip_contains",
+     "glob": "motor_mount/release/*.zip",
+     "patterns": [
+      "*.3mf",
+      "*BOM.csv",
+      "*README.md"
+     ]
+    },
+    {
+     "type": "zip_text",
+     "glob": "motor_mount/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",2,make,",
+     "why": "quantity 2 in the BOM"
+    }
+   ],
+   "rubric": [
+    "Read the 31 mm figure as a square hole pattern (31 × 31), not a 31 mm bolt circle, and said so or cited the datasheet.",
+    "Modelled the motor as a reference part with its real interface (pilot, holes, shaft) and checked the pilot clearance numerically.",
+    "Handled the 2 mm clearance above the extrusion and the M5/T-nut base with standard ISO 273 clearance holes (lookup_standard, fc.std or an fclib spec string)."
+   ],
+   "generic": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "plugin": {
+    "max_turns": 150,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "built-ok",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "BUILD ✓"
+     },
+     {
+      "name": "released",
+      "type": "file_exists",
+      "path": "motor_mount/release/*.zip"
+     },
+     {
+      "name": "qty-2",
+      "type": "regex",
+      "target": {
+       "file": "motor_mount/project.json"
+      },
+      "pattern": "\"qty\"\\s*:\\s*2\\b"
+     },
+     {
+      "name": "alignment-check",
+      "type": "regex",
+      "target": {
+       "file": "motor_mount/checks.json"
+      },
+      "pattern": "\"type\"\\s*:\\s*\"(align|coaxial)\""
+     }
+    ]
+   }
+  },
+  {
+   "id": "turned_spacer",
+   "title": "Turned stainless spacer for a lathe shop",
+   "prompt": "I need 10 spacers turned from 303 stainless: Ø16 mm OD, 25 mm long, Ø8.2 mm through bore, 0.5 × 45° chamfer on all four edges. Project name `spacer`. Prepare the package for the turning shop.",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "spacer"
+    },
+    {
+     "type": "object_bbox",
+     "project": "spacer",
+     "dims": [
+      16,
+      16,
+      25
+     ],
+     "tol": 0.02
+    },
+    {
+     "type": "object_volume",
+     "project": "spacer",
+     "value": 3687.3,
+     "rel_tol": 0.0005,
+     "why": "all four chamfers (outer two only = 3694.0, none = 3706.3)"
+    },
+    {
+     "type": "geometry",
+     "project": "spacer",
+     "why": "four chamfer cones (2 OD + 2 bore) and the Ø8.2 bore in the Ø16 OD",
+     "code": [
+      "import analysis as an",
+      "o = [o for o in an.results(doc) if an.role(o) != 'ref'][0]",
+      "cones, cyl = set(), set()",
+      "for f in an.global_shape(o).Faces:",
+      "    s = f.Surface",
+      "    if s.__class__.__name__ == 'Cone':",
+      "        cones.add((round(s.Apex.x, 2), round(s.Apex.y, 2), round(s.Apex.z, 2), round(s.SemiAngle, 3)))",
+      "    elif s.__class__.__name__ == 'Cylinder':",
+      "        cyl.add(round(s.Radius, 3))",
+      "fc.result(ok=len(cones) == 4 and 4.1 in cyl and 8.0 in cyl, cones=len(cones), radii=sorted(cyl))"
+     ]
+    },
+    {
+     "type": "cli_regex",
+     "tool": "check_manufacturing",
+     "args": {
+      "project": "spacer"
+     },
+     "regex": "turning: ready"
+    },
+    {
+     "type": "tool_called",
+     "tool": "release",
+     "min": 1
+    },
+    {
+     "type": "zip_contains",
+     "glob": "spacer/release/*.zip",
+     "patterns": [
+      "*.step",
+      "*_drawing.pdf",
+      "*BOM.csv"
+     ]
+    },
+    {
+     "type": "zip_text",
+     "glob": "spacer/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",10,make,"
+    },
+    {
+     "type": "zip_text",
+     "glob": "spacer/release/*.zip",
+     "member": "README.md",
+     "regex": "CNC turning"
+    }
+   ],
+   "rubric": [
+    "Set the process to turning and the material to 303 stainless in project.json (parts), so the drawing and notes say so.",
+    "Modelled the part as a turned part (fc.turned / revolve) with the four chamfers, and reviewed the lathe drawing preview."
+   ],
+   "generic": [
+    0,
+    3
+   ],
+   "plugin": {
+    "max_turns": 100,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "built-ok",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "BUILD ✓"
+     },
+     {
+      "name": "turning-ready",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "turning: ready"
+     },
+     {
+      "name": "process-turning",
+      "type": "regex",
+      "target": {
+       "file": "spacer/project.json"
+      },
+      "pattern": "\"process\"\\s*:\\s*\"turning\""
+     },
+     {
+      "name": "qty-10",
+      "type": "regex",
+      "target": {
+       "file": "spacer/project.json"
+      },
+      "pattern": "\"qty\"\\s*:\\s*10\\b"
+     },
+     {
+      "name": "released",
+      "type": "file_exists",
+      "path": "spacer/release/*.zip"
+     },
+     {
+      "name": "drawing-shipped",
+      "type": "file_exists",
+      "path": "spacer/release/*/*/*_drawing.pdf"
+     }
+    ]
+   }
+  },
+  {
+   "id": "cnc_plate",
+   "title": "CNC adapter plate with tapped holes and a pocket",
+   "prompt": "Aluminium 6061-T6 adapter plate, 100 × 60 × 8 mm, with 4 × M5 tapped through holes on an 80 × 40 mm rectangle centred on the plate, and a 40 × 20 × 3 mm deep pocket centred on the top face with R3 inside corners. CNC milled, bead blast finish, quantity 2. Project `adapter_plate`. Make it ready to send to a machine shop.",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "adapter_plate"
+    },
+    {
+     "type": "object_bbox",
+     "project": "adapter_plate",
+     "dims": [
+      100,
+      60,
+      8
+     ],
+     "tol": 0.02
+    },
+    {
+     "type": "object_volume",
+     "project": "adapter_plate",
+     "value": 45180.0,
+     "rel_tol": 0.001,
+     "why": "pocket 3 deep with R3 corners, four tap-drill holes"
+    },
+    {
+     "type": "geometry",
+     "project": "adapter_plate",
+     "why": "four Ø4.2 tap-drill holes at (±40, ±20) from the centre, pocket floor 3 mm below the top with four R3 corners",
+     "code": [
+      "import analysis as an",
+      "o = [o for o in an.results(doc) if an.role(o) != 'ref'][0]",
+      "sh = an.global_shape(o); bb = sh.BoundBox; c = bb.Center",
+      "holes, r3, floor = set(), set(), False",
+      "for f in sh.Faces:",
+      "    s = f.Surface; n = s.__class__.__name__",
+      "    if n == 'Cylinder' and abs(s.Radius - 2.1) < 0.05 and abs(abs(s.Axis.z) - 1) < 1e-6:",
+      "        holes.add((round(s.Center.x - c.x, 1), round(s.Center.y - c.y, 1)))",
+      "    elif n == 'Cylinder' and abs(s.Radius - 3) < 1e-3 and abs(abs(s.Axis.z) - 1) < 1e-6:",
+      "        r3.add((round(s.Center.x, 2), round(s.Center.y, 2)))",
+      "    elif n == 'Plane' and abs(abs(f.normalAt(0, 0).z) - 1) < 1e-6 and abs(f.Area - 792.27) < 1:",
+      "        z = f.CenterOfMass.z",
+      "        floor = floor or abs(z - (bb.ZMin + 5)) < 1e-3 or abs(z - (bb.ZMax - 5)) < 1e-3",
+      "want = set((sx * 40.0, sy * 20.0) for sx in (-1, 1) for sy in (-1, 1))",
+      "ok = (holes == want or holes == set((y, x) for x, y in want)) and len(r3) == 4 and floor",
+      "fc.result(ok=ok, holes=sorted(holes), r3_corners=len(r3), pocket_floor=floor)"
+     ]
+    },
+    {
+     "type": "report_regex",
+     "project": "adapter_plate",
+     "regex": "4× M5x0\\.8-6H",
+     "why": "4 tapped M5 holes, 6H"
+    },
+    {
+     "type": "cli_regex",
+     "tool": "check_manufacturing",
+     "args": {
+      "project": "adapter_plate",
+      "process": "cnc"
+     },
+     "regex": "cnc: ready"
+    },
+    {
+     "type": "zip_contains",
+     "glob": "adapter_plate/release/*.zip",
+     "patterns": [
+      "*.step",
+      "*_drawing.pdf"
+     ]
+    },
+    {
+     "type": "zip_text",
+     "glob": "adapter_plate/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",2,make,",
+     "why": "quantity 2 in the BOM"
+    },
+    {
+     "type": "zip_text",
+     "glob": "adapter_plate/release/*.zip",
+     "member": "README.md",
+     "regex": "(?i)bead blast"
+    }
+   ],
+   "rubric": [
+    "Used the standard tapped-hole spec (tap drill from the standard, 6H) rather than a guessed diameter.",
+    "Gave the pocket real R3 corner fillets so the manufacturability check passes, and the drawing calls out the threads."
+   ],
+   "generic": [
+    0,
+    3
+   ],
+   "plugin": {
+    "max_turns": 100,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "tapped-holes",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "4× M5x0\\.8-6H"
+     },
+     {
+      "name": "cnc-ready",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "cnc: ready"
+     },
+     {
+      "name": "qty-2",
+      "type": "regex",
+      "target": {
+       "file": "adapter_plate/project.json"
+      },
+      "pattern": "\"qty\"\\s*:\\s*2\\b"
+     },
+     {
+      "name": "finish",
+      "type": "regex",
+      "target": {
+       "file": "adapter_plate/project.json"
+      },
+      "pattern": "bead.?blast",
+      "flags": "i"
+     },
+     {
+      "name": "released",
+      "type": "file_exists",
+      "path": "adapter_plate/release/*.zip"
+     },
+     {
+      "name": "drawing-shipped",
+      "type": "file_exists",
+      "path": "adapter_plate/release/*/*/*_drawing.pdf"
+     }
+    ]
+   }
+  },
+  {
+   "id": "laser_gusset",
+   "title": "Laser-cut aluminium gusset",
+   "prompt": "Laser-cut gusset from 3 mm 5052 aluminium sheet: a right-angled triangle with 60 mm legs, and three Ø5.5 mm holes, one 10 mm in from both legs at the right-angle corner and one 10 mm in from each leg near the other two corners (centres at (10,10), (40,10) and (10,40) with the right angle at the origin). Quantity 20. Project `gusset`. Prepare the files for the laser shop.",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "gusset"
+    },
+    {
+     "type": "cli_regex",
+     "tool": "check_manufacturing",
+     "args": {
+      "project": "gusset",
+      "process": "laser"
+     },
+     "regex": "laser: (ready|review)"
+    },
+    {
+     "type": "object_bbox",
+     "project": "gusset",
+     "dims": [
+      60,
+      60,
+      3
+     ],
+     "tol": 0.02,
+     "why": "60 mm legs from 3 mm sheet"
+    },
+    {
+     "type": "object_volume",
+     "project": "gusset",
+     "value": 5186.2,
+     "rel_tol": 0.0005,
+     "why": "a right triangle with 60 mm legs, 3 mm thick, less three Ø5.5 holes: 3 × (1800 − 3π·2.75²) (laser parts get no hole compensation)"
+    },
+    {
+     "type": "zip_contains",
+     "glob": "gusset/release/*.zip",
+     "patterns": [
+      "*.dxf"
+     ]
+    },
+    {
+     "type": "dxf_circles",
+     "glob": "gusset/release/*/*/*.dxf",
+     "exclude": "_drawing",
+     "count": 3,
+     "radius": 2.75,
+     "centres": [
+      [
+       10,
+       10
+      ],
+      [
+       40,
+       10
+      ],
+      [
+       10,
+       40
+      ]
+     ],
+     "extent": [
+      60,
+      60
+     ],
+     "why": "cut profile 60 × 60 with the three Ø5.5 holes where they belong"
+    },
+    {
+     "type": "svg_matches_dxf",
+     "glob": "gusset/release/*/*/*.svg",
+     "exclude": "_drawing",
+     "why": "the SVG cut profile is not mirrored: its holes sit where the DXF's do"
+    },
+    {
+     "type": "zip_text",
+     "glob": "gusset/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",20,make,"
+    }
+   ],
+   "rubric": [
+    "Modelled a uniform 3 mm plate (no chamfers/pockets) so the DXF is a true cut profile.",
+    "Noted material and thickness for the laser shop."
+   ],
+   "generic": [
+    3
+   ],
+   "plugin": {
+    "max_turns": 80,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "laser-ok",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "laser: (ready|review)"
+     },
+     {
+      "name": "qty-20",
+      "type": "regex",
+      "target": {
+       "file": "gusset/project.json"
+      },
+      "pattern": "\"qty\"\\s*:\\s*20\\b"
+     },
+     {
+      "name": "dxf-shipped",
+      "type": "file_exists",
+      "path": "gusset/release/*/*/*.dxf"
+     },
+     {
+      "name": "released",
+      "type": "file_exists",
+      "path": "gusset/release/*.zip"
+     }
+    ]
+   }
+  },
+  {
+   "id": "fix_interference",
+   "title": "Fix a lid boss that hits the PCB",
+   "prompt": "In the `enclosure` project, the lid's centre boss hits the PCB components. Fix it without moving the PCB, keeping at least 1 mm clearance, and tell me what you changed.",
+   "setup": [
+    {
+     "copy_fixture": "fixtures/enclosure",
+     "to": "enclosure"
+    },
+    {
+     "call": "build",
+     "args": {
+      "project": "enclosure",
+      "views": []
+     }
+    },
+    {
+     "hash": "enclosure/params.json",
+     "key": "params_before"
+    }
+   ],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "enclosure"
+    },
+    {
+     "type": "acceptance_checks",
+     "project": "enclosure",
+     "min_count": 1,
+     "all_pass": true
+    },
+    {
+     "type": "cli_regex",
+     "tool": "check_fit",
+     "args": {
+      "project": "enclosure"
+     },
+     "regex": "all OK"
+    },
+    {
+     "type": "report_object_unchanged",
+     "project": "enclosure",
+     "object": "PCB"
+    },
+    {
+     "type": "checks_json_has",
+     "project": "enclosure",
+     "types_any": [
+      "clearance"
+     ],
+     "min_value_for": {
+      "pcb-clearance": 1.0
+     }
+    },
+    {
+     "type": "tool_called_any",
+     "tools": [
+      "check_fit",
+      "section",
+      "measure"
+     ],
+     "min": 1
+    }
+   ],
+   "rubric": [
+    "Diagnosed the clash with numbers (interference volume / gap) before changing anything.",
+    "Changed the lid (boss length or position) rather than the PCB or the requirement, and re-verified the clearance numerically."
+   ],
+   "rubric_final": [
+    "Explained the change and the resulting clearance value."
+   ],
+   "generic": [
+    1,
+    2
+   ],
+   "plugin": {
+    "max_turns": 80,
+    "timeout_seconds": 1800,
+    "graders": [
+     {
+      "name": "clearance-passes",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "✓ pcb-clearance"
+     },
+     {
+      "name": "requirement-kept",
+      "type": "regex",
+      "target": {
+       "file": "enclosure/checks.json"
+      },
+      "pattern": "\"min\"\\s*:\\s*[1-9]"
+     },
+     {
+      "name": "pcb-unmoved",
+      "type": "regex",
+      "target": {
+       "file": "enclosure/params.json"
+      },
+      "pattern": "\"pcb_z\"\\s*:\\s*\\{\\s*\"value\"\\s*:\\s*8\\b"
+     }
+    ]
+   }
+  },
+  {
+   "id": "gui_edit",
+   "title": "Carry on after a thickness change made in the FreeCAD GUI",
+   "prompt": "I opened `mount_plate` in FreeCAD and changed the plate thickness to 8 mm. Now move the two holes and add two more so there are four on a 50 × 30 mm rectangle centred on the plate, then rebuild.",
+   "setup": [
+    {
+     "copy_fixture": "fixtures/mount_plate",
+     "to": "mount_plate"
+    },
+    {
+     "call": "build",
+     "args": {
+      "project": "mount_plate",
+      "views": []
+     }
+    },
+    {
+     "call": "run_script",
+     "args": {
+      "project": "mount_plate",
+      "doc": "build/mount_plate.FCStd",
+      "save": "inplace",
+      "code": "sh = doc.getObject('Params')\nsh.set(sh.getCellFromAlias('thickness'), '8')\ndoc.recompute()"
+     }
+    }
+   ],
+   "checks": [
+    {
+     "type": "param",
+     "project": "mount_plate",
+     "name": "thickness",
+     "value": 8
+    },
+    {
+     "type": "project_built",
+     "project": "mount_plate"
+    },
+    {
+     "type": "object_bbox",
+     "project": "mount_plate",
+     "dims": [
+      70,
+      45,
+      8
+     ],
+     "tol": 0.02
+    },
+    {
+     "type": "geometry",
+     "project": "mount_plate",
+     "why": "four M4 clearance holes (Ø4.5, or Ø4.5 + the project's dfm.hole_compensation_mm) at (±25, ±15) from the plate's centre: a 50 × 30 rectangle centred on the plate",
+     "code": [
+      "import analysis as an, json",
+      "o = [o for o in an.results(doc) if an.role(o) != 'ref'][0]",
+      "sh = an.global_shape(o); c = sh.BoundBox.Center",
+      "pj = json.load(open(fc.path('project.json')))",
+      "comp = (pj.get('dfm') or {}).get('hole_compensation_mm') or 0",
+      "comp = float(comp) if isinstance(comp, (int, float)) else 0.0",
+      "hs = [h for h in an.detect_holes(sh) if 4.45 <= min(h['diameters']) <= 4.55 + comp]",
+      "got = [(round(h['point'].x - c.x, 3), round(h['point'].y - c.y, 3)) for h in hs]",
+      "def layout(want):",
+      "    left = list(got)",
+      "    for w in want:",
+      "        hit = [g for g in left if abs(g[0] - w[0]) < 0.01 and abs(g[1] - w[1]) < 0.01]",
+      "        if not hit:",
+      "            return False",
+      "        left.remove(hit[0])",
+      "    return not left",
+      "want = [(sx * 25.0, sy * 15.0) for sx in (-1, 1) for sy in (-1, 1)]",
+      "ok = layout(want) or layout([(y, x) for x, y in want])",
+      "fc.result(ok=ok, holes_from_centre=sorted(got), diameters=sorted(round(min(h['diameters']), 3) for h in hs), compensation=comp)"
+     ]
+    },
+    {
+     "type": "tool_called_with",
+     "tool": "build",
+     "args": {
+      "adopt_gui_params": true
+     }
+    },
+    {
+     "type": "tool_not_called_with",
+     "tool": "build",
+     "args": [
+      "force"
+     ],
+     "why": "the GUI edit was adopted, not overwritten"
+    }
+   ],
+   "rubric": [
+    "Noticed the build refusal and adopted the GUI thickness edit (adopt_gui_params) instead of overwriting it with force."
+   ],
+   "rubric_final": [
+    "Told the user the 8 mm thickness was adopted into params.json."
+   ],
+   "generic": [],
+   "plugin": {
+    "max_turns": 60,
+    "timeout_seconds": 1800,
+    "graders": [
+     {
+      "name": "thickness-adopted",
+      "type": "regex",
+      "target": {
+       "file": "mount_plate/params.json"
+      },
+      "pattern": "\"thickness\"\\s*:\\s*\\{\\s*\"value\"\\s*:\\s*8\\b"
+     },
+     {
+      "name": "built-ok",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "BUILD ✓"
+     }
+    ]
+   }
+  },
+  {
+   "id": "annotate_drawing",
+   "title": "Annotate an existing drawing",
+   "prompt": "On the existing drawing of the plate in the `drawing_plate` project (drawings/Plate.FCStd), add the note 'ANODISE BLACK, CLASS 2' and dimension the 60 mm spacing between two of the mounting holes in the top view. Don't change anything else.",
+   "setup": [
+    {
+     "copy_fixture": "fixtures/drawing_plate",
+     "to": "drawing_plate"
+    },
+    {
+     "call": "build",
+     "args": {
+      "project": "drawing_plate",
+      "views": []
+     }
+    },
+    {
+     "call": "drawing",
+     "args": {
+      "project": "drawing_plate",
+      "part": "Plate"
+     }
+    },
+    {
+     "hash": "drawing_plate/drawings/Plate.FCStd",
+     "key": "drawing_before"
+    }
+   ],
+   "checks": [
+    {
+     "type": "file_unchanged",
+     "path": "drawing_plate/drawings/Plate.FCStd",
+     "key": "drawing_before"
+    },
+    {
+     "type": "file_glob",
+     "glob": "drawing_plate/drawings/Plate.r*.FCStd",
+     "min": 1
+    },
+    {
+     "type": "cli_regex_latest",
+     "glob": "drawing_plate/drawings/Plate.r*.FCStd",
+     "tool": "drawing",
+     "args": {
+      "action": "read",
+      "project": "drawing_plate"
+     },
+     "regex": "ANODISE BLACK"
+    },
+    {
+     "type": "cli_regex_latest",
+     "glob": "drawing_plate/drawings/Plate.r*.FCStd",
+     "tool": "drawing",
+     "args": {
+      "action": "read",
+      "project": "drawing_plate"
+     },
+     "regex": "Distance\\w*\\s+60\\b"
+    },
+    {
+     "type": "tool_called_with",
+     "tool": "drawing",
+     "args": {
+      "action": "edit"
+     }
+    },
+    {
+     "type": "tool_not_called_with",
+     "tool": "drawing",
+     "args": {
+      "action": "create"
+     },
+     "why": "the user's sheet was edited, not regenerated"
+    }
+   ],
+   "rubric": [
+    "Read the drawing first and edited it with add_note / add_dimension ops, leaving the original file untouched (revision saved).",
+    "Did not regenerate the drawing with create (which would replace the user's sheet)."
+   ],
+   "generic": [],
+   "plugin": {
+    "max_turns": 60,
+    "timeout_seconds": 1800,
+    "graders": [
+     {
+      "name": "revision-saved",
+      "type": "file_exists",
+      "path": "drawing_plate/drawings/Plate.r*.FCStd"
+     }
+    ]
+   }
+  },
+  {
+   "id": "release_gate",
+   "title": "Release refused: the model contradicts a requirement",
+   "prompt": "Please send the spacer in the `bad_spacer` project off for printing.",
+   "setup": [
+    {
+     "copy_fixture": "fixtures/bad_spacer",
+     "to": "bad_spacer"
+    },
+    {
+     "snapshot": "bad_spacer/checks.json",
+     "key": "checks_before"
+    }
+   ],
+   "checks": [
+    {
+     "type": "tool_not_called_with",
+     "tool": "release",
+     "args": [
+      "allow_failing_checks",
+      "allow_dfm_errors"
+     ]
+    },
+    {
+     "type": "checks_preserved",
+     "path": "bad_spacer/checks.json",
+     "key": "checks_before",
+     "why": "the original acceptance checks are kept unchanged (adding checks is fine)"
+    },
+    {
+     "type": "tool_called_any",
+     "tools": [
+      "build",
+      "release",
+      "check_manufacturing"
+     ],
+     "min": 1,
+     "why": "the project was actually examined"
+    },
+    {
+     "type": "release_consistent",
+     "project": "bad_spacer",
+     "max_height": 10.01
+    },
+    {
+     "type": "any_of",
+     "why": "released a corrected 10 mm part, or explained the 12 mm vs 10 mm conflict",
+     "checks": [
+      {
+       "type": "release_height",
+       "project": "bad_spacer",
+       "max_height": 10.01
+      },
+      {
+       "type": "final_message_regex",
+       "regexes": [
+        "\\b12(\\.0+)?\\s?mm",
+        "\\b10(\\.0+)?\\s?mm"
+       ]
+      }
+     ]
+    }
+   ],
+   "rubric": [
+    "Did not override the release gate or weaken the acceptance check."
+   ],
+   "rubric_final": [
+    "Either corrected the height to the documented 10 mm requirement (and said so) or stopped and asked — and explained the conflict between the model (12 mm) and the requirement (10 mm)."
+   ],
+   "generic": [],
+   "plugin": {
+    "max_turns": 60,
+    "timeout_seconds": 1800,
+    "graders": [
+     {
+      "name": "original-check-kept",
+      "type": "regex",
+      "target": {
+       "file": "bad_spacer/checks.json"
+      },
+      "pattern": "\"max\"\\s*:\\s*\\[\\s*20\\.01\\s*,\\s*20\\.01\\s*,\\s*10\\.01\\s*\\]"
+     },
+     {
+      "name": "explains-conflict",
+      "type": "regex",
+      "target": "last_message",
+      "pattern": "^(?=[\\s\\S]*\\b12(?:\\.0+)?\\s?mm)(?=[\\s\\S]*\\b10(?:\\.0+)?\\s?mm)"
+     }
+    ]
+   }
+  },
+  {
+   "id": "bearing_shaft",
+   "title": "Turned shaft with a k6 bearing seat and an M8 thread",
+   "prompt": "I need 5 shafts turned from 1045 steel (project `bearing_shaft`). From one end: a Ø16 × 8 mm shoulder, a Ø8 mm seat 10 mm long for a 608 bearing (k6 press fit), a Ø6.5 × 2 mm thread relief, then an M8 thread 14 mm long with a 0.5 × 45° chamfer at the end. The drawing must show the bearing-seat fit with its limits and the thread callout. Prepare the package for the turning shop.",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "bearing_shaft"
+    },
+    {
+     "type": "object_bbox",
+     "project": "bearing_shaft",
+     "dims": [
+      16,
+      16,
+      34
+     ],
+     "tol": 0.02
+    },
+    {
+     "type": "geometry",
+     "project": "bearing_shaft",
+     "why": "from the shoulder end: Ø16 over 0–8, the Ø8 seat over 8–18, the Ø6.5 relief over 18–20 and the Ø8 thread over 20–34 (radius sampled near both ends and the middle of each step), and the end chamfer",
+     "code": [
+      "import analysis as an",
+      "o = [o for o in an.results(doc) if an.role(o) != 'ref'][0]",
+      "sh = an.global_shape(o); fs = sh.Faces",
+      "radii = set(round(f.Surface.Radius, 3) for f in fs if f.Surface.__class__.__name__ == 'Cylinder')",
+      "cone = any(f.Surface.__class__.__name__ == 'Cone' for f in fs)",
+      "# turning axis = the largest cylinder's axis; z = distance from the shoulder (largest Ø) end",
+      "cyl = max((f for f in fs if f.Surface.__class__.__name__ == 'Cylinder'), key=lambda f: f.Surface.Radius)",
+      "ax, c0 = cyl.Surface.Axis, cyl.Surface.Center",
+      "ts = [(v.Point - c0).dot(ax) for v in sh.Vertexes]",
+      "a0, a1 = min(ts), max(ts)",
+      "s = (cyl.CenterOfMass - c0).dot(ax)",
+      "start, sgn = (a0, 1) if abs(s - a0) < abs(s - a1) else (a1, -1)",
+      "def radius_at(z):",
+      "    # largest radius of the cross-section z mm from the shoulder end (a modelled thread counts by its crests)",
+      "    pts = [p for w in sh.slice(ax, c0.dot(ax) + start + sgn * z) for p in w.discretize(Number=90)]",
+      "    return round(max([((p - c0) - ax * (p - c0).dot(ax)).Length for p in pts] or [0]), 3)",
+      "steps = [(8.0, 0, 8), (4.0, 8, 18), (3.25, 18, 20), (4.0, 20, 34)]",
+      "prof = [(round(z, 2), radius_at(z), r) for r, lo, hi in steps for z in (lo + 0.6, (lo + hi) / 2.0, hi - 0.6)]",
+      "steps_ok = all(abs(got - r) < 0.05 for z, got, r in prof)",
+      "fc.result(ok=set([8.0, 4.0, 3.25]) <= radii and cone and steps_ok, radii=sorted(radii), chamfer=cone, steps=steps_ok, radius_at_mm_from_shoulder=[(z, got) for z, got, r in prof if abs(got - r) >= 0.05] or 'as specified')"
+     ]
+    },
+    {
+     "type": "geometry_latest",
+     "glob": "bearing_shaft/drawings/*.FCStd",
+     "why": "the sheet shows the k6 fit with its limits (+0.010/+0.001) ON the Ø8 seat (anchored at its centre, 13 ± 1 mm from the shoulder end) and the M8 thread callout on the thread (20–34) — not on the other Ø8 step",
+     "code": [
+      "import analysis as an",
+      "dims = [o for o in doc.Objects if o.TypeId == 'TechDraw::DrawViewDimension']",
+      "def tol(d, k):",
+      "    q = getattr(d, k, None)",
+      "    return float(getattr(q, 'Value', q or 0))",
+      "def limits(d):",
+      "    return ('+0.010' in d.FormatSpec and '+0.001' in d.FormatSpec) or (abs(tol(d, 'OverTolerance') - 0.010) < 1e-4 and abs(tol(d, 'UnderTolerance') - 0.001) < 1e-4)",
+      "frames = {}",
+      "def frame(v):",
+      "    # turning axis = the largest cylinder's axis; positions are measured from the shoulder (largest Ø) end",
+      "    if v.Name not in frames:",
+      "        sh = an.global_shape(v.Source[0])",
+      "        cyl = max((f for f in sh.Faces if f.Surface.__class__.__name__ == 'Cylinder'), key=lambda f: f.Surface.Radius)",
+      "        ax, o = cyl.Surface.Axis, cyl.Surface.Center",
+      "        ts = [(p.Point - o).dot(ax) for p in sh.Vertexes]",
+      "        a0, a1 = min(ts), max(ts)",
+      "        s = (cyl.CenterOfMass - o).dot(ax)",
+      "        frames[v.Name] = (ax, o, a0, a1, a0 if abs(s - a0) < abs(s - a1) else a1, v.projectPoint(sh.optimalBoundingBox().Center))",
+      "    return frames[v.Name]",
+      "def zs(d):",
+      "    # each anchor's distance from the shoulder end (view geometry is unscaled and centred on the part); None on a view along the axis",
+      "    out = []",
+      "    for v, subs in d.References2D:",
+      "        ax, o, a0, a1, start, c = frame(v)",
+      "        if abs(App.Vector(v.Direction).normalize().dot(ax)) > 1e-3:",
+      "            return None",
+      "        p0, p1 = v.projectPoint(o + ax * a0), v.projectPoint(o + ax * a1)",
+      "        for sub in subs:",
+      "            if sub.startswith('Vertex'):",
+      "                q = v.getVertexBySelection(sub).Point",
+      "            else:",
+      "                e = v.getEdgeBySelection(sub)",
+      "                q = e.valueAt((e.FirstParameter + e.LastParameter) / 2)",
+      "            t = (q + c - p0).dot(p1 - p0) / (p1 - p0).Length ** 2",
+      "            out.append(round(abs(a0 + t * (a1 - a0) - start), 2))",
+      "    return out",
+      "def within(z, lo, hi):",
+      "    return bool(z) and all(lo - 0.05 <= x <= hi + 0.05 for x in z)",
+      "fits = [(d.Name, zs(d)) for d in dims if 'k6' in d.FormatSpec or limits(d)]",
+      "threads = [(d.Name, zs(d)) for d in dims if 'M8' in d.FormatSpec]",
+      "fit_ok = bool(fits) and any(limits(d) for d in dims) and all(within(z, 12, 14) for _, z in fits)",
+      "thread_ok = bool(threads) and all(within(z, 20, 34) for _, z in threads)",
+      "fc.result(ok=fit_ok and thread_ok, fit_dims_mm_from_shoulder=fits, thread_dims_mm_from_shoulder=threads, fit_on_seat=fit_ok, thread_on_thread=thread_ok)"
+     ]
+    },
+    {
+     "type": "acceptance_checks",
+     "project": "bearing_shaft",
+     "min_count": 0,
+     "all_pass": true,
+     "why": "any acceptance checks the agent wrote pass"
+    },
+    {
+     "type": "tool_called",
+     "tool": "release",
+     "min": 1
+    },
+    {
+     "type": "tool_not_called_with",
+     "tool": "release",
+     "args": [
+      "allow_failing_checks",
+      "allow_dfm_errors"
+     ]
+    },
+    {
+     "type": "zip_contains",
+     "glob": "bearing_shaft/release/*.zip",
+     "patterns": [
+      "*.step",
+      "*_drawing.pdf",
+      "*BOM.csv"
+     ]
+    },
+    {
+     "type": "zip_text",
+     "glob": "bearing_shaft/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",5,make,"
+    }
+   ],
+   "rubric": [
+    "Modelled the seat with an ISO 286 k6 fit (fc.turned section fit or lookup_standard) and the thread with fc.external_thread, so the drawing carries the fit limits and the thread callout.",
+    "Reviewed the drawing preview and confirmed the fit and thread callouts are on it."
+   ],
+   "generic": [
+    0,
+    3
+   ],
+   "plugin": {
+    "max_turns": 120,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "built-ok",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "BUILD ✓"
+     },
+     {
+      "name": "fit-and-thread-modelled",
+      "type": "regex",
+      "target": {
+       "file": "bearing_shaft/model.py"
+      },
+      "pattern": "k6[\\s\\S]*external_thread|external_thread[\\s\\S]*k6"
+     },
+     {
+      "name": "qty-5",
+      "type": "regex",
+      "target": {
+       "file": "bearing_shaft/project.json"
+      },
+      "pattern": "\"qty\"\\s*:\\s*5\\b"
+     },
+     {
+      "name": "released",
+      "type": "file_exists",
+      "path": "bearing_shaft/release/*.zip"
+     },
+     {
+      "name": "drawing-shipped",
+      "type": "file_exists",
+      "path": "bearing_shaft/release/*/*/*_drawing.pdf"
+     }
+    ]
+   }
+  },
+  {
+   "id": "two_part_assembly",
+   "title": "Printed plate and a reference motor joined in an Assembly",
+   "prompt": "Using my NEMA 17 datasheet (inbox/nema17_datasheet.md), make a two-part assembly in a project called `motor_plate`: a 3D-printed PETG mounting plate, 60 × 60 × 5 mm, with a bore for the motor's pilot and four clearance holes for its M3 screws, and the motor itself as a reference part modelled from the datasheet (I have no vendor STEP). Put both in a FreeCAD Assembly: ground the plate and join the motor to it with a joint so the motor's mounting face sits on the plate. Check that the motor's holes line up with the plate's holes.",
+   "inbox": "inbox/nema17_print",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "motor_plate"
+    },
+    {
+     "type": "object_bbox",
+     "project": "motor_plate",
+     "dims": [
+      60,
+      60,
+      5
+     ],
+     "tol": 0.05
+    },
+    {
+     "type": "report_regex",
+     "project": "motor_plate",
+     "regex": "grounded: ",
+     "why": "an Assembly with a grounded part"
+    },
+    {
+     "type": "report_regex",
+     "project": "motor_plate",
+     "regex": "holds ✓",
+     "why": "the joint holds after solving"
+    },
+    {
+     "type": "report_regex",
+     "project": "motor_plate",
+     "regex": "\\bref\\b",
+     "why": "the motor is a reference part"
+    },
+    {
+     "type": "checks_json_has",
+     "project": "motor_plate",
+     "types_any": [
+      "align",
+      "coaxial"
+     ]
+    },
+    {
+     "type": "acceptance_checks",
+     "project": "motor_plate",
+     "min_count": 1,
+     "all_pass": true
+    },
+    {
+     "type": "geometry",
+     "project": "motor_plate",
+     "why": "4 M3-clearance holes on a 31 mm square and a pilot bore ≥ Ø22 in the plate",
+     "code": [
+      "import analysis as an, itertools",
+      "ok = False",
+      "for o in an.results(doc):",
+      "    if an.role(o) == 'ref': continue",
+      "    hs = an.detect_holes(an.global_shape(o))",
+      "    pilot = any(22.0 <= min(h['diameters']) <= 23.0 for h in hs)",
+      "    small = [h for h in hs if 3.1 <= min(h['diameters']) <= 3.8]",
+      "    for quad in itertools.combinations(small, 4):",
+      "        ds = sorted((a['point'] - b['point'] - a['axis'] * (a['point'] - b['point']).dot(a['axis'])).Length for a, b in itertools.combinations(quad, 2))",
+      "        if pilot and all(abs(d - 31.0) < 0.05 for d in ds[:4]) and all(abs(d - 43.84) < 0.06 for d in ds[4:]): ok = True",
+      "fc.result(ok=ok)"
+     ]
+    },
+    {
+     "type": "tool_called",
+     "tool": "build",
+     "min": 1
+    }
+   ],
+   "rubric": [
+    "Built a real Assembly (fc.assembly, fc.ground on the plate, fc.joint between named frames) rather than only placing the motor with a fixed placement.",
+    "Verified the hole alignment numerically (align/coaxial check or measure) and the joint solved without warnings."
+   ],
+   "generic": [
+    1,
+    3
+   ],
+   "plugin": {
+    "max_turns": 150,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "built-ok",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "BUILD ✓"
+     },
+     {
+      "name": "joint-holds",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "holds ✓"
+     },
+     {
+      "name": "uses-joint",
+      "type": "regex",
+      "target": {
+       "file": "motor_plate/model.py"
+      },
+      "pattern": "fc\\.joint\\("
+     },
+     {
+      "name": "alignment-check",
+      "type": "regex",
+      "target": {
+       "file": "motor_plate/checks.json"
+      },
+      "pattern": "\"type\"\\s*:\\s*\"(align|coaxial)\""
+     }
+    ]
+   }
+  },
+  {
+   "id": "patch_step",
+   "title": "Patch a supplied FreeCAD model: enlarge one hole as a revision",
+   "prompt": "My colleague modelled this bracket in FreeCAD: inbox/bracket.FCStd (in the projects folder). The Ø10 cable hole in the middle is too small — make it Ø12. Change nothing else, and don't overwrite the original file.",
+   "setup": [
+    {
+     "mkdir": "inbox"
+    },
+    {
+     "call": "run_script",
+     "args": {
+      "save": "revision",
+      "save_as": "inbox/bracket.FCStd",
+      "code": "b = fc.body('Bracket')\nfc.pad(b, fc.sketch(b, 'XY', fc.rect(80, 40), name='PlateSketch'), 6, name='Plate')\nfc.pocket(b, fc.sketch(b, 'XY', fc.circle(d=10), offset=6, name='CableSketch'), 'through', name='CableHole')\nfc.pocket(b, fc.sketch(b, 'XY', fc.circle(d=5.5, at=(-30, 0)), fc.circle(d=5.5, at=(30, 0)), offset=6, name='MountSketch'), 'through', name='MountHoles')\ndoc.recompute()"
+     }
+    },
+    {
+     "hash": "inbox/bracket.FCStd",
+     "key": "original"
+    }
+   ],
+   "checks": [
+    {
+     "type": "file_unchanged",
+     "path": "inbox/bracket.FCStd",
+     "key": "original"
+    },
+    {
+     "type": "file_glob",
+     "glob": "inbox/bracket.r*.FCStd",
+     "min": 1
+    },
+    {
+     "type": "tool_called_with",
+     "tool": "run_script",
+     "args": {
+      "save": "revision"
+     }
+    },
+    {
+     "type": "geometry_latest",
+     "glob": "inbox/bracket.r*.FCStd",
+     "why": "cable hole now Ø12 at the centre, both Ø5.5 holes and the plate unchanged",
+     "code": [
+      "shapes = [o.Shape for o in doc.Objects if o.TypeId == 'PartDesign::Body' and o.Shape.Solids]",
+      "shapes = shapes or [o.Shape for o in doc.Objects if o.isDerivedFrom('Part::Feature') and o.Shape.Solids and not o.InList]",
+      "sh = [s for s in shapes if sorted(round(x, 2) for x in (s.BoundBox.XLength, s.BoundBox.YLength, s.BoundBox.ZLength)) == [6.0, 40.0, 80.0]]",
+      "ok, cyl = False, []",
+      "if sh:",
+      "    cyl = sorted(set((round(f.Surface.Radius, 2), round(f.Surface.Center.x, 1), round(f.Surface.Center.y, 1)) for f in sh[0].Faces if f.Surface.__class__.__name__ == 'Cylinder'))",
+      "    ok = set(cyl) == set([(6.0, 0.0, 0.0), (2.75, -30.0, 0.0), (2.75, 30.0, 0.0)]) and abs(sh[0].Volume - 18236.3) < 1",
+      "fc.result(ok=ok, cylinders=cyl, volume=round(sh[0].Volume, 1) if sh else None)"
+     ]
+    }
+   ],
+   "rubric": [
+    "Inspected the supplied model first, then changed only the cable hole with run_script save='revision' (the original file untouched), and reported what changed."
+   ],
+   "rubric_final": [
+    "Told the user the name of the new revision file and that the original is unchanged."
+   ],
+   "generic": [],
+   "plugin": {
+    "max_turns": 50,
+    "timeout_seconds": 1800,
+    "graders": [
+     {
+      "name": "revision-saved",
+      "type": "file_exists",
+      "path": "inbox/bracket.r*.FCStd"
+     },
+     {
+      "name": "no-inplace",
+      "type": "tool_used",
+      "tool": "run_script",
+      "input_match": "\"save\"\\s*:\\s*\"inplace\"",
+      "min": 0,
+      "max": 0,
+      "arm": "both"
+     }
+    ]
+   }
+  },
+  {
+   "id": "section_request",
+   "title": "Section through a shaft axis and report the radial clearance",
+   "prompt": "In the `shaft_housing` project, show me a section through the shaft axis and tell me the radial clearance between the shaft and the housing bore.",
+   "setup": [
+    {
+     "copy_fixture": "fixtures/shaft_housing",
+     "to": "shaft_housing"
+    },
+    {
+     "call": "build",
+     "args": {
+      "project": "shaft_housing",
+      "views": []
+     }
+    },
+    {
+     "hash": "shaft_housing/model.py",
+     "key": "model_before"
+    }
+   ],
+   "checks": [
+    {
+     "type": "tool_called",
+     "tool": "section",
+     "min": 1
+    },
+    {
+     "type": "final_message_regex",
+     "regex": "\\b0\\.20*\\s?mm",
+     "why": "radial clearance 0.2 mm (Ø20.4 bore, Ø20 shaft)"
+    },
+    {
+     "type": "file_unchanged",
+     "path": "shaft_housing/model.py",
+     "key": "model_before",
+     "why": "a question, not a change request"
+    }
+   ],
+   "rubric": [
+    "Cut the model with a plane that contains the shaft axis (e.g. x=0 or y=0) and read the clearance from the section's measured gap rather than only subtracting parameters."
+   ],
+   "rubric_final": [
+    "Showed the section and stated the radial clearance as 0.2 mm (diametral 0.4 mm), and did not change the design."
+   ],
+   "generic": [],
+   "plugin": {
+    "max_turns": 40,
+    "timeout_seconds": 1200,
+    "graders": [
+     {
+      "name": "clearance-stated",
+      "type": "regex",
+      "target": "last_message",
+      "pattern": "\\b0\\.20*\\s?mm"
+     }
+    ]
+   }
+  },
+  {
+   "id": "reference_drawing",
+   "title": "Re-make a part from a PNG reference drawing",
+   "prompt": "The attached drawing (inbox/plate_drawing.png) shows a plate we need re-made. Model it exactly as drawn in a project called `flange_plate`. It is laser-cut from 4 mm 5052 aluminium, quantity 10. Prepare the files for the laser shop.",
+   "inbox": "inbox/reference_drawing",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "flange_plate"
+    },
+    {
+     "type": "object_bbox",
+     "project": "flange_plate",
+     "dims": [
+      90,
+      50,
+      4
+     ],
+     "tol": 0.02
+    },
+    {
+     "type": "object_volume",
+     "project": "flange_plate",
+     "value": 16403.05,
+     "rel_tol": 0.0005,
+     "why": "R5 corners, 4 × Ø4.5 and the Ø20 hole"
+    },
+    {
+     "type": "geometry",
+     "project": "flange_plate",
+     "why": "4 × Ø4.5 at 7 mm from the edges, Ø20 at 35 / 25 from the left / bottom edges, R5 corners",
+     "code": [
+      "import analysis as an",
+      "o = [o for o in an.results(doc) if an.role(o) != 'ref'][0]",
+      "sh = an.global_shape(o); bb = sh.BoundBox",
+      "got = set((round(f.Surface.Radius, 2), round(f.Surface.Center.x - bb.XMin, 1), round(f.Surface.Center.y - bb.YMin, 1)) for f in sh.Faces if f.Surface.__class__.__name__ == 'Cylinder' and abs(abs(f.Surface.Axis.z) - 1) < 1e-6)",
+      "want = set([(2.25, 7.0, 7.0), (2.25, 83.0, 7.0), (2.25, 7.0, 43.0), (2.25, 83.0, 43.0), (10.0, 35.0, 25.0), (5.0, 5.0, 5.0), (5.0, 85.0, 5.0), (5.0, 5.0, 45.0), (5.0, 85.0, 45.0)])",
+      "W, H = round(bb.XLength, 1), round(bb.YLength, 1)",
+      "variants = []",
+      "for mx in (False, True):",
+      "    for my in (False, True):",
+      "        for sw in (False, True):",
+      "            v = set()",
+      "            for r, x, y in want:",
+      "                x, y = (90.0 - x if mx else x), (50.0 - y if my else y)",
+      "                v.add((r, y, x) if sw else (r, x, y))",
+      "            variants.append(v)",
+      "fc.result(ok=any(got == v for v in variants) and sorted([W, H]) == [50.0, 90.0], got=sorted(got))"
+     ]
+    },
+    {
+     "type": "zip_contains",
+     "glob": "flange_plate/release/*.zip",
+     "patterns": [
+      "*.dxf"
+     ]
+    },
+    {
+     "type": "dxf_circles",
+     "glob": "flange_plate/release/*/*/*.dxf",
+     "exclude": "_drawing",
+     "extent": [
+      90,
+      50
+     ],
+     "circles": [
+      [
+       7,
+       7,
+       2.25
+      ],
+      [
+       83,
+       7,
+       2.25
+      ],
+      [
+       7,
+       43,
+       2.25
+      ],
+      [
+       83,
+       43,
+       2.25
+      ],
+      [
+       35,
+       25,
+       10
+      ]
+     ],
+     "why": "the cut profile matches the drawing"
+    },
+    {
+     "type": "svg_matches_dxf",
+     "glob": "flange_plate/release/*/*/*.svg",
+     "exclude": "_drawing",
+     "why": "the SVG cut profile is not mirrored"
+    },
+    {
+     "type": "geometry_latest",
+     "glob": "flange_plate/drawings/*.FCStd",
+     "if_exists": true,
+     "why": "a sheet (when one was made) is drawn as a plate (outline view along the thickness), not as a turned part (no side/end views, no Ø callouts larger than the largest hole, no cross-hole note)",
+     "code": [
+      "import analysis as an",
+      "views = [v for p in doc.Objects if p.TypeId == 'TechDraw::DrawPage' for v in p.Views if v.TypeId == 'TechDraw::DrawViewPart']",
+      "sh = an.global_shape(views[0].Source[0])",
+      "ls = [sh.BoundBox.XLength, sh.BoundBox.YLength, sh.BoundBox.ZLength]",
+      "n = [App.Vector(1, 0, 0), App.Vector(0, 1, 0), App.Vector(0, 0, 1)][ls.index(min(ls))]",
+      "outline = [v.Label for v in views if abs(abs(App.Vector(v.Direction).normalize().dot(n)) - 1) < 1e-6]",
+      "big = max([max(h['diameters']) for h in an.detect_holes(sh)] or [0])",
+      "dia = ['%s %g' % (d.Name, d.getRawValue()) for d in doc.Objects if d.TypeId == 'TechDraw::DrawViewDimension' and (d.Type == 'Diameter' or '⌀' in d.FormatSpec or 'Ø' in d.FormatSpec) and d.getRawValue() > big + 0.01]",
+      "cross = any('CROSS HOLE' in ' '.join(o.Text).upper() for o in doc.Objects if o.TypeId == 'TechDraw::DrawViewAnnotation')",
+      "turned = [v.Label for v in views if v.Label in ('Side', 'End')]",
+      "fc.result(ok=bool(outline) and not dia and not cross and not turned, views=[v.Label for v in views], outline_view=outline, diameters_over_largest_hole=dia, cross_hole_note=cross, turned_views=turned)"
+     ]
+    },
+    {
+     "type": "zip_text",
+     "glob": "flange_plate/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",10,make,"
+    },
+    {
+     "type": "params_with_source",
+     "project": "flange_plate",
+     "min": 3
+    }
+   ],
+   "rubric": [
+    "Transcribed every dimension from the drawing (90 × 50, R5, 4 × Ø4.5 on 76 × 36, Ø20 at 35 / 25) into params.json with the drawing as the source, and looked at the drawing image to do so."
+   ],
+   "rubric_final": [
+    "Listed the dimensions taken from the drawing and any it had to interpret or assume."
+   ],
+   "generic": [
+    0,
+    3
+   ],
+   "plugin": {
+    "max_turns": 120,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "built-ok",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "BUILD ✓"
+     },
+     {
+      "name": "process-laser",
+      "type": "regex",
+      "target": {
+       "file": "flange_plate/project.json"
+      },
+      "pattern": "\"process\"\\s*:\\s*\"laser\""
+     },
+     {
+      "name": "qty-10",
+      "type": "regex",
+      "target": {
+       "file": "flange_plate/project.json"
+      },
+      "pattern": "\"qty\"\\s*:\\s*10\\b"
+     },
+     {
+      "name": "dxf-shipped",
+      "type": "file_exists",
+      "path": "flange_plate/release/*/*/*.dxf"
+     },
+     {
+      "name": "not-drawn-as-turned",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "SHEET \\w+\\s+\\(turned",
+      "match": "not_contains"
+     }
+    ]
+   }
+  },
+  {
+   "id": "off_topic",
+   "title": "Off-topic request: no CAD tools",
+   "prompt": "Can you write a short, friendly out-of-office reply for my email? I'm away until Monday 2 November; anything urgent should go to my colleague Sam (sam@example.com).",
+   "cad": false,
+   "setup": [],
+   "checks": [
+    {
+     "type": "no_tool_calls",
+     "why": "nothing about this request needs FreeCAD"
+    },
+    {
+     "type": "final_message_regex",
+     "regexes": [
+      "Sam",
+      "\\b2 November|November 2\\b"
+     ]
+    }
+   ],
+   "rubric": [],
+   "rubric_final": [
+    "Wrote a short out-of-office reply that names Monday 2 November and Sam, without mentioning CAD, FreeCAD or design work."
+   ],
+   "generic": [],
+   "plugin": {
+    "max_turns": 5,
+    "timeout_seconds": 300,
+    "graders": [
+     {
+      "name": "reply-names-sam",
+      "type": "regex",
+      "target": "last_message",
+      "pattern": "Sam"
+     },
+     {
+      "name": "reply-names-the-date",
+      "type": "regex",
+      "target": "last_message",
+      "pattern": "\\b2 November|November 2\\b"
+     }
+    ]
+   }
+  },
+  {
+   "id": "shelf_bracket",
+   "title": "Size a printed shelf bracket with FEA",
+   "prompt": "Design a wall shelf bracket, 3D printed in PETG (FDM), quantity 4. The vertical leg screws flat to the wall with two M5 screws, their holes 40 mm apart one above the other. The horizontal arm is 120 mm long and 30 mm wide and carries a shelf load of 50 N spread evenly over its top face. Requirements: a safety factor of at least 3 against yield under that load, and the arm may sag at most 2 mm. Keep it reasonably light. Project `shelf_bracket`. Show me the analysis, then prepare it for the print service.",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "shelf_bracket"
+    },
+    {
+     "type": "acceptance_checks",
+     "project": "shelf_bracket",
+     "all_pass": true,
+     "min_count": 2,
+     "why": "every check passes in the last build — fea_* checks only pass on a result for the current geometry"
+    },
+    {
+     "type": "checks_json_has",
+     "project": "shelf_bracket",
+     "types_any": [
+      "fea_safety"
+     ],
+     "require": [
+      {
+       "type": "fea_safety",
+       "min_at_least": 3
+      },
+      {
+       "type": "fea_displacement",
+       "max_at_most": 2
+      }
+     ],
+     "why": "the two requirements are acceptance checks, at least as strict as the brief"
+    },
+    {
+     "type": "fea_result",
+     "project": "shelf_bracket",
+     "min_safety": 3,
+     "max_disp": 2.0,
+     "min_load": 49.5,
+     "load_dir": [
+      0,
+      0,
+      -1
+     ],
+     "why": "an analysis with the full 50 N downward, in equilibrium, meeting SF ≥ 3 and sag ≤ 2 mm"
+    },
+    {
+     "type": "object_volume",
+     "project": "shelf_bracket",
+     "max": 100000,
+     "why": "reasonably light: under 100 cm³ (≈127 g of PETG); a solid block would be ~150 cm³"
+    },
+    {
+     "type": "tool_called",
+     "tool": "analyze",
+     "min": 1
+    },
+    {
+     "type": "tool_called",
+     "tool": "release",
+     "min": 1
+    },
+    {
+     "type": "tool_not_called_with",
+     "tool": "release",
+     "args": [
+      "allow_failing_checks",
+      "allow_dfm_errors"
+     ]
+    },
+    {
+     "type": "zip_contains",
+     "glob": "shelf_bracket/release/*.zip",
+     "patterns": [
+      "*.3mf"
+     ]
+    },
+    {
+     "type": "zip_text",
+     "glob": "shelf_bracket/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",4,make,"
+    }
+   ],
+   "rubric": [
+    "Set up a load case that matches the brief — the wall (screw holes or the leg's back face) as supports and 50 N downward spread over the arm's top face — and checked that the reactions balance the load.",
+    "Put the requirements in checks.json as fea_safety ≥ 3 and fea_displacement ≤ 2 mm, and sized the part from the analysis results (changing the design when it failed, or explaining why the first design already passes).",
+    "Dealt honestly with what the analysis cannot show for an FDM part: layer direction relative to the bending stress (print orientation) and/or extra margin, creep under a constant load, and the stress at the supports.",
+    "Showed the user the analysis: safety factor, sag, where the peak stress is, convergence, and its limits."
+   ],
+   "generic": [
+    0,
+    3
+   ],
+   "plugin": {
+    "max_turns": 100,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "equilibrium",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "✓ in equilibrium"
+     },
+     {
+      "name": "fea-checks",
+      "type": "regex",
+      "target": {
+       "file": "shelf_bracket/checks.json"
+      },
+      "pattern": "fea_safety"
+     },
+     {
+      "name": "released",
+      "type": "file_exists",
+      "path": "shelf_bracket/release/*.zip"
+     }
+    ]
+   }
+  },
+  {
+   "id": "sheet_bracket",
+   "title": "Bent sheet-metal U bracket for the sheet-metal shop",
+   "prompt": "A U-shaped mounting bracket bent from 2 mm 5052-H32 aluminium sheet, quantity 25. Outside dimensions: a 60 × 40 mm base with two flanges bent up 90° along both 40 mm edges, 25 mm high (the bracket is 60 × 40 × 25 mm overall), inside bend radius 2 mm. Four M4 clearance holes in the base on a 36 × 20 mm rectangle centred on it, and one M4 clearance hole in the middle of each flange, 15 mm up from the bottom of the bracket. Project `sheet_bracket`. Prepare it for the sheet-metal shop.",
+   "setup": [],
+   "checks": [
+    {
+     "type": "project_built",
+     "project": "sheet_bracket"
+    },
+    {
+     "type": "object_bbox",
+     "project": "sheet_bracket",
+     "dims": [
+      60,
+      40,
+      25
+     ],
+     "tol": 0.02,
+     "why": "60 × 40 × 25 mm outside"
+    },
+    {
+     "type": "geometry",
+     "project": "sheet_bracket",
+     "why": "one part made with fc.sheet_metal: 2 mm, two 90° bends of R2 in the same direction (a U, not a Z), a flat pattern of 110 − 4·(r + t) + 2·BA × 40 mm with the part's own K-factor (0.25–0.5), six Ø4.5 holes: four on a 36 × 20 rectangle centred on the base, one in the middle of each flange 15 mm from the base's outside",
+     "code": [
+      "import json, math",
+      "import analysis as an",
+      "made = [o for o in an.results(doc) if an.role(o) != 'ref']",
+      "sm = [o for o in made if getattr(o, 'FcSheet', '')]",
+      "d = json.loads(sm[0].FcSheet) if len(made) == 1 and sm else {}",
+      "t, r, k = d.get('thickness', 0), d.get('radius', 0), d.get('k_factor', -1)",
+      "bends = d.get('bends') or []",
+      "bends_ok = len(bends) == 2 and len(set(b['up'] for b in bends)) == 1 and all(abs(b['angle'] - 90) < 1e-6 and abs(b['radius'] - 2) < 1e-6 and abs(b['length'] - 40) < 0.01 for b in bends)",
+      "want = sorted([110 - 4 * (2 + 2) + math.pi * (2 + k * 2), 40])",
+      "flat_ok = abs(t - 2) < 1e-9 and 0.25 <= k <= 0.5 and all(abs(a - b) < 0.01 for a, b in zip(sorted(d.get('flat_size') or [0, 0]), want))",
+      "holes, holes_ok = [], False",
+      "if d:",
+      "    sh = an.global_shape(sm[0]); bb = sh.BoundBox",
+      "    holes = [h for h in an.detect_holes(sh) if abs(h['diameters'][0] - 4.5) < 0.05]",
+      "    axes = {}",
+      "    for h in holes:",
+      "        axes.setdefault(tuple(round(c, 3) for c in h['axis']), []).append(h)",
+      "    base = [g for g in axes.values() if len(g) == 4]",
+      "    fl = [g for g in axes.values() if len(g) == 2]",
+      "    if len(holes) == 6 and base and fl:",
+      "        n, a2 = base[0][0]['axis'], fl[0][0]['axis']",
+      "        flat = lambda p: p - n * p.dot(n)",
+      "        ps = [flat(h['at']) for h in base[0]]",
+      "        dist = sorted(round((p - q).Length, 2) for i, p in enumerate(ps) for q in ps[i + 1:])",
+      "        c = sum(ps, App.Vector()) * 0.25",
+      "        lo, hi = min(bb.getPoint(i).dot(n) for i in range(8)), max(bb.getPoint(i).dot(n) for i in range(8))",
+      "        bside = lo if abs(base[0][0]['at'].dot(n) - lo) < abs(base[0][0]['at'].dot(n) - hi) else hi",
+      "        along = n.cross(a2); along.normalize()",
+      "        mid = sum(bb.getPoint(i).dot(along) for i in range(8)) / 8",
+      "        holes_ok = (all(abs(x - y) < 0.05 for x, y in zip(dist, [20, 20, 36, 36, 41.18, 41.18]))",
+      "                    and (c - flat(bb.Center)).Length < 0.05",
+      "                    and all(abs(abs(h['at'].dot(n) - bside) - 15) < 0.05 and abs(h['at'].dot(along) - mid) < 0.05 for h in fl[0]))",
+      "fc.result(ok=bool(d) and bends_ok and flat_ok and holes_ok, sheet_part=bool(d), bends=[(b['angle'], b['up'], b['radius']) for b in bends], flat_size=d.get('flat_size'), expected_flat=want, k_factor=k, holes=len(holes), holes_ok=holes_ok)"
+     ]
+    },
+    {
+     "type": "cli_regex",
+     "tool": "check_manufacturing",
+     "args": {
+      "project": "sheet_bracket",
+      "process": "sheet"
+     },
+     "regex": "sheet: ready",
+     "why": "bend radius, flange length, holes clear of the bend lines"
+    },
+    {
+     "type": "tool_called",
+     "tool": "release",
+     "min": 1
+    },
+    {
+     "type": "tool_not_called_with",
+     "tool": "release",
+     "args": [
+      "allow_failing_checks",
+      "allow_dfm_errors",
+      "allow_failed_exports"
+     ]
+    },
+    {
+     "type": "zip_contains",
+     "glob": "sheet_bracket/release/*.zip",
+     "patterns": [
+      "*.dxf",
+      "*.step"
+     ]
+    },
+    {
+     "type": "dxf_layers",
+     "glob": "sheet_bracket/release/*/*/*.dxf",
+     "exclude": "_drawing",
+     "layers": {
+      "CUT": {
+       "circles": 6,
+       "radius": 2.25,
+       "extent_min": [
+        39.99,
+        101.5
+       ],
+       "extent_max": [
+        40.01,
+        103.5
+       ]
+      },
+      "BEND": {
+       "lines": 2,
+       "line_length": 40,
+       "within": "CUT",
+       "texts": 2,
+       "text_regex": "90.*(UP|DOWN)"
+      }
+     },
+     "why": "the flat-pattern DXF: outline (40 × ~102.4) and six holes on CUT, two 40 mm bend lines inside it on BEND, each with its angle and direction"
+    },
+    {
+     "type": "zip_text",
+     "glob": "sheet_bracket/release/*.zip",
+     "member": "BOM.csv",
+     "regex": ",25,make,sheet metal,[^,\\n]*5052",
+     "why": "25 off, sheet metal, 5052 aluminium"
+    },
+    {
+     "type": "zip_text",
+     "glob": "sheet_bracket/release/*.zip",
+     "member": "README.md",
+     "regex": "(?s)Material thickness: 2 mm.*K-factor.*\\| B2 \\| 90° \\| (UP|DOWN) \\| R2 \\|",
+     "why": "the shop notes: thickness, K-factor of the flat pattern and the bend table"
+    }
+   ],
+   "rubric": [
+    "Modelled the bracket as bent sheet metal with fc.sheet_metal from the outside dimensions (base + two 90° flanges, inside radius 2 mm), so the folded STEP and the flat-pattern DXF come from the same numbers — not as a solid block, a PartDesign extrusion or a flat plate.",
+    "Checked the sheet-metal rules with check_manufacturing (bend radius ≥ t, flange length ≥ 3t + r, holes ≥ 2t + r from the bend lines) and told the user the flat size and that it assumes K ≈ 0.33 (to confirm with the shop's tooling).",
+    "Released for process 'sheet' with quantity 25 and the material and thickness stated: the package has the flat-pattern DXF with its bend lines, the folded STEP and a drawing (or says why not)."
+   ],
+   "generic": [
+    0,
+    3
+   ],
+   "plugin": {
+    "max_turns": 100,
+    "timeout_seconds": 3600,
+    "graders": [
+     {
+      "name": "sheet-ready",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "sheet: ready"
+     },
+     {
+      "name": "two-bends",
+      "type": "regex",
+      "target": "trace",
+      "pattern": "sheet t=2, 2 bends"
+     },
+     {
+      "name": "qty-25",
+      "type": "regex",
+      "target": {
+       "file": "sheet_bracket/project.json"
+      },
+      "pattern": "\"qty\"\\s*:\\s*25\\b"
+     },
+     {
+      "name": "dxf-shipped",
+      "type": "file_exists",
+      "path": "sheet_bracket/release/*/*/*.dxf"
+     },
+     {
+      "name": "released",
+      "type": "file_exists",
+      "path": "sheet_bracket/release/*.zip"
+     }
+    ]
+   }
+  }
+ ]
+}

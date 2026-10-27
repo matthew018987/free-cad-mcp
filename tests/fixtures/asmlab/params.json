@@ -1,0 +1,26 @@
+{
+ "plate_t": {
+  "value": 5,
+  "unit": "mm",
+  "source": "test fixture"
+ },
+ "bore_d": {
+  "value": 8,
+  "unit": "mm",
+  "source": "test fixture"
+ },
+ "shaft_d": {
+  "value": 7.8,
+  "unit": "mm",
+  "source": "test fixture"
+ },
+ "spin": {
+  "value": 30,
+  "unit": "deg",
+  "source": "test fixture: revolute angle"
+ },
+ "mount_mode": {
+  "value": "against",
+  "source": "test fixture: 'aligned' puts the motor inside the plate"
+ }
+}

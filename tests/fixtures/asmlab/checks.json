@@ -1,0 +1,6 @@
+[
+  {"id": "motor-on-top", "type": "min_z", "object": "Motor", "min": 4.999, "max": 5.001},
+  {"id": "motor-seat",   "type": "clearance", "a": "Base", "b": "Motor", "contact_ok": true, "min": 0},
+  {"id": "shaft-axis",   "type": "coaxial", "a": "Base.holes(d=8)", "b": "Shaft"},
+  {"id": "shaft-gap",    "type": "radial_gap", "a": "Base.holes(d=8)", "b": "Shaft", "min": 0.05}
+]

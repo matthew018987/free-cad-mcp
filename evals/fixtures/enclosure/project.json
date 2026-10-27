@@ -1,0 +1,3 @@
+{"name": "enclosure", "description": "Electronics enclosure lid; the PCB is fixed by the base.", "units": "mm",
+ "process": "fdm", "material": {"name": "PETG", "density_g_cm3": 1.27}, "clearance": {"default_min_mm": 0.3},
+ "parts": {"Lid": {"process": "fdm", "material": "PETG", "qty": 1}}}

@@ -1,0 +1,8 @@
+[
+  {"id": "motor-seat",    "type": "clearance", "a": "Bracket", "b": "Motor", "min": 0.2, "contact_ok": true,
+   "note": "motor face sits on the plate; every other surface ≥ 0.2 mm away"},
+  {"id": "pilot-gap",     "type": "radial_gap", "a": "Bracket.holes(d=22.5)", "b": "Motor", "min": 0.2},
+  {"id": "screw-pattern", "type": "align", "a": "Bracket.holes(d=3.4)", "b": "Motor.holes(d=2.5)", "max_offset": 0.05},
+  {"id": "frame-clear",   "type": "min_z", "object": "Motor", "min": 1.0, "note": "motor body clear of the frame at z = 0"},
+  {"id": "mass",          "type": "mass", "object": "Bracket", "max_g": 40}
+]

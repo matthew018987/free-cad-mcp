@@ -1,0 +1,4 @@
+{"block": {"value": 40, "unit": "mm", "source": "user"},
+ "length": {"value": 30, "unit": "mm", "source": "user"},
+ "bore_d": {"value": 20.4, "unit": "mm", "source": "first guess"},
+ "shaft_d": {"value": 20, "unit": "mm", "source": "customer shaft (measured)"}}

@@ -1,0 +1,2 @@
+{"name": "asmlab", "process": "cnc", "material": {"name": "Aluminium 6061-T6", "density_g_cm3": 2.70},
+ "clearance": {"default_min_mm": 0.0}}
