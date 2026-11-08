@@ -3,7 +3,7 @@
 """End-to-end smoke test: drives the server over real stdio JSON-RPC with a
 real FreeCAD. Run with any Python 3.7+:
 
-    python3 tests/smoke_test.py
+    python3 tests/test_core_loop.py
 """
 import json
 import os

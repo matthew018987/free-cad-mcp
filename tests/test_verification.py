@@ -13,7 +13,7 @@ answers are known in advance (tests/fixtures/fitlab/model.py):
   Lifted (in a container at z+50) ↔ Floor   90 mm (40 if placements were ignored)
   LinkedBox (link z+100 in the container)   z from 150
 
-    python3 tests/test_m2.py
+    python3 tests/test_verification.py
 """
 import json
 import os

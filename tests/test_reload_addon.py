@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""the MCP Reload helper (freecad_addon/) in real FreeCAD GUIs.
+"""the MCP Reload helper (freecad-addon/) in real FreeCAD GUIs.
 
     python3 tests/test_reload_addon.py
 
@@ -24,7 +24,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from mcp_client import check, fails  # noqa: E402
 
-ADDON = os.path.join(ROOT, "freecad_addon")
+ADDON = os.path.join(ROOT, "freecad-addon")
 MOD = os.path.join(ADDON, "FreeCADMCPReload")
 RES = sorted(glob.glob("/Applications/FreeCAD*.app/Contents/Resources"))[-1]
 LOCK = os.path.join(os.path.expanduser("~"), ".cache", "freecad-mcp", "gui", "gui.lock")
@@ -60,10 +60,10 @@ try:
     src = read(os.path.join(MOD, "mcp_reload.py"))
     init_gui = read(os.path.join(MOD, "InitGui.py"))
     macro = read(os.path.join(ADDON, "MCP_Reload.FCMacro"))
-    expected = ("# MCP_Reload.FCMacro — generated from freecad_addon/FreeCADMCPReload/mcp_reload.py; do not edit.\n"
+    expected = ("# MCP_Reload.FCMacro — generated from freecad-addon/FreeCADMCPReload/mcp_reload.py; do not edit.\n"
                 "# Run it to toggle the watcher: open documents reload when the FreeCAD MCP server rebuilds them.\n\n"
                 + src + "\n\n# --- macro entry point\ntoggle()\n")
-    check("the macro is regenerated from mcp_reload.py (as tools/build_plugin.py writes it)", macro == expected)
+    check("the macro is regenerated from mcp_reload.py (as scripts/build_plugin.py writes it)", macro == expected)
     try:
         compile(macro, "MCP_Reload.FCMacro", "exec")
         compile(src, "mcp_reload.py", "exec")

@@ -1,4 +1,4 @@
-# MCP_Reload.FCMacro — generated from freecad_addon/FreeCADMCPReload/mcp_reload.py; do not edit.
+# MCP_Reload.FCMacro — generated from freecad-addon/FreeCADMCPReload/mcp_reload.py; do not edit.
 # Run it to toggle the watcher: open documents reload when the FreeCAD MCP server rebuilds them.
 
 # SPDX-License-Identifier: Apache-2.0

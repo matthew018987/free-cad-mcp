@@ -29,7 +29,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from mcp_client import check, fails  # noqa: E402
 
-spec = importlib.util.spec_from_file_location("build_plugin", os.path.join(ROOT, "tools", "build_plugin.py"))
+spec = importlib.util.spec_from_file_location("build_plugin", os.path.join(ROOT, "scripts", "build_plugin.py"))
 bp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bp)
 
@@ -46,7 +46,7 @@ JS = {"separators": (",", ":"), "ensure_ascii": False}     # JSON.stringify's sp
 
 
 def build():
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_plugin.py")], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "build_plugin.py")], capture_output=True, text=True)
     return r.returncode == 0 and "validation: ok" in r.stdout, r.stdout + r.stderr
 
 
@@ -107,26 +107,26 @@ try:
     print("build: one version, results kept, strict validation")
     ok, out = build()
     check("build_plugin.py builds and validates", ok, out)
-    src = json.load(open(os.path.join(ROOT, "plugin", "plugin.json")))
+    src = json.load(open(os.path.join(ROOT, ".claude-plugin", "plugin.json")))
     built = json.load(open(os.path.join(DIST, ".claude-plugin", "plugin.json")))
     with zipfile.ZipFile(os.path.join(ROOT, "dist", "freecad-mcp.mcpb")) as z:
         mf = json.loads(z.read("manifest.json"))
-    check("plugin/plugin.json carries no version; the build stamps SERVER_VERSION everywhere",
+    check("the repo's .claude-plugin/plugin.json carries no version; the build stamps SERVER_VERSION everywhere",
           "version" not in src and built["version"] == SERVER_VERSION == mf["version"]
           and list(built)[:3] == ["name", "displayName", "version"], (src.get("version"), built["version"],
                                                                       mf["version"], SERVER_VERSION))
     real_read = bp.read
-    bp.read = lambda p: (J(dict(src, version="9.9.9")) if p == "plugin/plugin.json" else real_read(p))
+    bp.read = lambda p: (J(dict(src, version="9.9.9")) if p == ".claude-plugin/plugin.json" else real_read(p))
     try:
         problems = bp.validate(os.path.join(ROOT, "dist", "freecad-design.zip"),
                                os.path.join(ROOT, "dist", "freecad-mcp.mcpb"))[0]
     finally:
         bp.read = real_read
-    check("validate() fails when plugin/plugin.json names another version",
+    check("validate() fails when .claude-plugin/plugin.json names another version",
           any("9.9.9" in p and "SERVER_VERSION" in p for p in problems), problems)
     check(".mcpb projects folder defaults to ~/CAD",
           mf["user_config"]["projects_dir"]["default"] == "~/CAD", mf["user_config"])
-    readme = open(os.path.join(ROOT, "plugin", "README.md")).read()
+    readme = open(os.path.join(ROOT, "docs", "plugin-readme.md")).read()
     check("README and the generator document the eval command (scaffold, real servers, MCP grant)",
           bp.EVAL_CMD in readme and bp.EVAL_CMD in bp.__doc__ and bp.EVAL_CMD in bp.make_plugin_evals.__doc__
           and bp.EVAL_CMD == 'claude plugin eval . --scaffold --allow-real-servers --allow-tools '

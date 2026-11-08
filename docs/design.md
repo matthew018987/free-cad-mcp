@@ -98,12 +98,12 @@ headless execution, screenshots, a parts library, and FEM through CalculiX.
 
 | Headless render (prototype) | Section render (prototype) | TechDraw export via GUI worker |
 |---|---|---|
-| ![](docs/spike/render_iso.png) | ![](docs/spike/render_section.png) | ![](docs/spike/techdraw_export.png) |
+| ![](images/render_iso.png) | ![](images/render_section.png) | ![](images/techdraw_export.png) |
 
 The section image shows why sections must report numbers. The shaft
 (Ø9.8 mm) has a 0.1 mm gap to its Ø10 mm bore, which can't be seen at this
 scale. The prototype also caps every body in the same red; the real version
-will give each body its own colour. Prototype code: `spikes/render_prototype.py`.
+will give each body its own colour. Prototype code: `docs/prototypes/render_prototype.py`.
 
 ---
 
@@ -434,19 +434,23 @@ its `references/` pages):
 | Layer | Seen when | Contents |
 |---|---|---|
 | Tool descriptions | Always, by any client | What each tool returns and when to use it |
-| MCP `instructions` (initialize) | Clients that honour it (Claude Code, likely Desktop) | ~10 lines: the core loop + "call `guide` first" → `prompt/server_instructions.md` |
+| MCP `instructions` (initialize) | Clients that honour it (Claude Code, likely Desktop) | ~10 lines: the core loop + "call `guide` first" → `server/server_instructions.md` |
 | `guide` tool | Any client, on demand | The full playbook (same text as the skill); `guide(topic="fclib")` etc. serves a reference page |
 | **Plugin skill** `freecad-design` | Automatically, for CAD tasks in Cowork and Claude Code | The playbook → `skills/freecad-design/SKILL.md`, with `references/` (fclib API generated from docstrings, checks, processes, troubleshooting) |
-| Plugin commands | When the user types them | `/freecad-design:new-part`, `check`, `drawing`, `release` → `plugin/commands/` |
-| Cowork project instructions | Every task in that project | Project-specific facts only (process, material, standard, title block) → `prompt/project_instructions_template.md` |
+| Plugin commands | When the user types them | `/freecad-design:new-part`, `check`, `drawing`, `release` → `commands/` |
+| Cowork project instructions | Every task in that project | Project-specific facts only (process, material, standard, title block) → `docs/project-instructions-template.md` |
 
 **Packaging for Cowork: a plugin.** Anthropic's plugin docs confirm that a
 plugin can bundle a **local MCP server** (a command the app starts, including
 `.mcpb` bundles) with skills and commands. The server "loads when the Cowork
 session runs on your computer"; chat ignores it.
 
-`tools/build_plugin.py` builds and validates it (`dist/freecad-design.zip`,
-one top folder, executable bits kept):
+The repository root is the plugin (`.claude-plugin/plugin.json` declares the
+server inline, because a root `.mcp.json` would also be read as this repo's
+project MCP config), and `.claude-plugin/marketplace.json` makes it a
+one-plugin marketplace, so Claude Code installs it straight from GitHub.
+`scripts/build_plugin.py` builds and validates the packaged copy
+(`dist/freecad-design.zip`, one top folder, executable bits kept):
 
 ```
 freecad-design/
@@ -457,7 +461,7 @@ freecad-design/
                        drawing_worker.py, fclib.py, analysis.py, render.py, manufacture.py, standards.py
   skills/freecad-design/SKILL.md + references/
   commands/            new-part.md, check.md, drawing.md, release.md
-  freecad_addon/       FreeCADMCPReload/ (addon) + MCP_Reload.FCMacro
+  freecad-addon/       FreeCADMCPReload/ (addon) + MCP_Reload.FCMacro
   evals/               the cases as a `claude plugin eval` suite
   evals_harness/       cases.json, fixtures, mcp_cli.py, run_case.py
 ```
@@ -475,7 +479,7 @@ its VM. `freecad_status` reports `host` (platform, machine, plugin root), so
 the first call shows which; in a VM there is no FreeCAD, and the status
 message points to the manual config.
 
-**Live view: MCP Reload.** A small FreeCAD addon (`freecad_addon/`), installed
+**Live view: MCP Reload.** A small FreeCAD addon (`freecad-addon/`), installed
 by `open_in_gui(install_reload_helper=true)` only with the user's OK. A
 `QTimer` polls the files of open documents; when one changes on disk (and has
 settled for 0.6 s) it closes and reopens it, keeping the camera, the active
@@ -509,12 +513,12 @@ workflow never depends on path mapping.
 | Phase | Scope | Status |
 |---|---|---|
 | **M0 spikes** | (a) GUI drawing worker (b) Cowork plugin launch (c) renderer at assembly scale | (a) ✓ works, with the HLR-wait and layout caveats in §2.3. (c) ✓ 3.3 s for 146k triangles. (b) moved to M4: needs the desktop app |
-| **M1 core loop** | server, worker protocol, `freecad_status`, `guide`, `create_project`, `list_projects`, file tools, `build` + report + history/Δ, `run_script`, `inspect`, `render`, `job_status`, `open_in_gui`; fclib params, sketch profiles, pad/pocket/fillet/chamfer, selectors, holes, ref parts, frames, mates, patterns | ✓ built. 50 stdio checks pass against real FreeCAD (`tests/smoke_test.py`, ~19 s). `examples/nema17_bracket` builds ✓ in 0.2 s |
-| **M2 verification** | `section`, `check_fit`, `measure`, `lookup_standard` + tables (insert / nut-trap / fit hole specs), `checks.json` evaluated in the build report, GUI-edit detection + `adopt_gui_params` | ✓ built. `tests/test_m2.py`: 56 checks against geometry with known answers (500 mm³ overlap, 2.0 gap, 0.1 radial gap, 0.03 pattern offset, contact with a 0.42 nearest gap, container and link placements), ~15 s. The NEMA17 example passes 5/5 acceptance checks |
-| **M3 drawings, export, release** | `drawing` create/read/edit via the GUI worker; `export` with verification; `check_manufacturing` (FDM/SLA, CNC, turning, laser); `release` package; turned parts (`fc.turned`, fits, threads) | ✓ built. `tests/test_m3.py`: 37 checks, ~70 s. Examples `nema17_bracket` (FDM) and `turned_shaft` (turning) release end to end |
+| **M1 core loop** | server, worker protocol, `freecad_status`, `guide`, `create_project`, `list_projects`, file tools, `build` + report + history/Δ, `run_script`, `inspect`, `render`, `job_status`, `open_in_gui`; fclib params, sketch profiles, pad/pocket/fillet/chamfer, selectors, holes, ref parts, frames, mates, patterns | ✓ built. 50 stdio checks pass against real FreeCAD (`tests/test_core_loop.py`, ~19 s). `examples/nema17_bracket` builds ✓ in 0.2 s |
+| **M2 verification** | `section`, `check_fit`, `measure`, `lookup_standard` + tables (insert / nut-trap / fit hole specs), `checks.json` evaluated in the build report, GUI-edit detection + `adopt_gui_params` | ✓ built. `tests/test_verification.py`: 56 checks against geometry with known answers (500 mm³ overlap, 2.0 gap, 0.1 radial gap, 0.03 pattern offset, contact with a 0.42 nearest gap, container and link placements), ~15 s. The NEMA17 example passes 5/5 acceptance checks |
+| **M3 drawings, export, release** | `drawing` create/read/edit via the GUI worker; `export` with verification; `check_manufacturing` (FDM/SLA, CNC, turning, laser); `release` package; turned parts (`fc.turned`, fits, threads) | ✓ built. `tests/test_assembly_release.py`: 37 checks, ~70 s. Examples `nema17_bracket` (FDM) and `turned_shaft` (turning) release end to end |
 | **M2b assemblies** | fclib helpers for the Assembly workbench: `fc.assembly`, `fc.add`, `fc.ground`, `fc.joint(kind, (part, frame), (part, frame), mode)`, `fc.solve` with per-joint verification | ✓ built. Joints reference whole parts with the named frame as the joint offset (no element names). The solver accepts parallel or anti-parallel axes and returns the solution nearest the start, so parts are pre-placed at the joint before solving, and every joint is re-measured afterwards ("holds ✓" / "off by …") |
 | **M4 package, reload, evals** | Cowork/Claude Code plugin + `.mcpb`, MCP Reload addon and macro, eval cases + harness + `claude plugin eval` suite; then a hardening round from the eval runs and an adversarial review (§13) | ✓ built. 14 eval cases; 1,013 stdio checks across 11 suites pass |
-| **M5 analysis** | FEM via CalculiX: material, fixtures, loads, mesh, solve → max von Mises, displacement, safety factor | ✓ built. `analyze` tool + `server/fea.py`: supports/loads on faces and holes (geometry references), forces, pressures, self weight; gmsh tet10 + CalculiX (bundled, ~2 s for a small part); results with location, stress away from supports, safety factor, reactions vs applied load, refined-mesh convergence; load cases in `fea.json`; `fea_safety`/`fea_stress`/`fea_displacement` checks, stale on geometry or case change, re-solved by release. Backlog round: natural frequencies and linear buckling (`fea_frequency`, `fea_buckling`), several parts bonded with CalculiX `*TIE` (FreeCAD's tie constraint tied coincident faces to themselves, so fea.py writes the input deck itself from gmsh's per-face groups and reads results with numpy), and ~7× faster solves (refined solve only for small meshes; the eval shelf bracket 150 s → 20 s). `tests/test_m5.py` checks a cantilever against beam theory (tip 0.581 mm vs 0.581–0.585; root 60 MPa), a uniform load (0.2177 mm exact), self weight, bolted holes, errors, stale checks and release |
+| **M5 analysis** | FEM via CalculiX: material, fixtures, loads, mesh, solve → max von Mises, displacement, safety factor | ✓ built. `analyze` tool + `server/fea.py`: supports/loads on faces and holes (geometry references), forces, pressures, self weight; gmsh tet10 + CalculiX (bundled, ~2 s for a small part); results with location, stress away from supports, safety factor, reactions vs applied load, refined-mesh convergence; load cases in `fea.json`; `fea_safety`/`fea_stress`/`fea_displacement` checks, stale on geometry or case change, re-solved by release. Backlog round: natural frequencies and linear buckling (`fea_frequency`, `fea_buckling`), several parts bonded with CalculiX `*TIE` (FreeCAD's tie constraint tied coincident faces to themselves, so fea.py writes the input deck itself from gmsh's per-face groups and reads results with numpy), and ~7× faster solves (refined solve only for small meshes; the eval shelf bracket 150 s → 20 s). `tests/test_fea.py` checks a cantilever against beam theory (tip 0.581 mm vs 0.581–0.585; root 60 MPa), a uniform load (0.2177 mm exact), self weight, bolted holes, errors, stale checks and release |
 
 ### Implementation map
 
@@ -526,18 +530,18 @@ workflow never depends on path mapping.
 | `server/render.py` | Headless renderer: vectorised z-buffer, BREP edges, silhouettes, hidden lines, sections with hatching, view grids; highlighted items over wireframe context |
 | `server/analysis.py` | Worker side: introspection in global coordinates (containers, links), hole detection, geometry references, `measure`, `check_fit`, `section` (+ matplotlib plot with zoomed insets), `checks.json` evaluation, snapshots and GUI-edit diffs |
 | `server/standards.py` | Stdlib tables shared by the server and fclib: ISO 261/262, 273, 4762 + DIN 974-1, 10642, 7380, 4032, 7089, ISO 286 (IT6–8, up to 250 mm), heat-set inserts (vendor-typical), process rules |
-| `tests/smoke_test.py` | M1: end-to-end checks over stdio with real FreeCAD (50) |
-| `tests/test_m2.py`, `tests/fixtures/fitlab/` | M2: verification against a fixture with known answers (56) |
+| `tests/test_core_loop.py` | M1: end-to-end checks over stdio with real FreeCAD (50) |
+| `tests/test_verification.py`, `tests/fixtures/fitlab/` | M2: verification against a fixture with known answers (56) |
 | `tests/mcp_client.py` | Shared stdio JSON-RPC test client |
 | `server/manufacture.py` | Verified exports (STEP re-import, mesh watertightness, R12 DXF writer with true arcs/circles), DFM per process, release records, BOM, notes, zip |
 | `server/drawing_worker.py` | Runs inside the FreeCAD GUI (private `user.cfg` with no splash screen; on macOS a background process with a transparent window, so nothing appears on screen or takes focus; one at a time): style detection, layout and scale, TechDraw views, dimensions verified by measurement, hole/thread/fit callouts, notes, title block, PDF/SVG/DXF/PNG export, one document per part; read and edit ops |
-| `tests/test_m3.py`, `tests/fixtures/asmlab/` | Assemblies, export, drawings, DFM, release (37) |
-| `tests/test_m4.py` | Plugin build, packaged server, reload helper, eval harness with known-good/bad solutions (49) |
+| `tests/test_assembly_release.py`, `tests/fixtures/asmlab/` | Assemblies, export, drawings, DFM, release (37) |
+| `tests/test_packaging.py` | Plugin build, packaged server, reload helper, eval harness with known-good/bad solutions (49) |
 | `tests/test_sheet_metal.py` | Bent sheet metal: folding, flat pattern maths, DFM, flat-pattern DXF, eval case solutions |
 | `tests/test_analysis.py` … `test_evals_plugin.py` | Hardening suites per area: analysis (123), drawings (115), manufacture/standards (116), worker/fclib (110), server (245), reload addon (46), evals/plugin (66) |
-| `server/fea.py`, `tests/test_m5.py` | Linear-static FEA: case setup on a copy of the part, gmsh mesh, CalculiX solve, result summary, plot; tests against beam theory |
-| `tools/build_plugin.py` | Builds and validates `dist/` (plugin zip, `.mcpb`, generated `claude plugin eval` suite) |
-| `freecad_addon/` | MCP Reload addon + macro |
+| `server/fea.py`, `tests/test_fea.py` | Linear-static FEA: case setup on a copy of the part, gmsh mesh, CalculiX solve, result summary, plot; tests against beam theory |
+| `scripts/build_plugin.py` | Builds and validates `dist/` (plugin zip, `.mcpb`, generated `claude plugin eval` suite) |
+| `freecad-addon/` | MCP Reload addon + macro |
 | `evals/` | 14 eval cases, fixtures, `mcp_cli.py` (tools from a shell), `run_case.py` (setup / brief / grade) |
 
 ### TechDraw findings (FreeCAD 1.1.4) the drawing worker relies on
