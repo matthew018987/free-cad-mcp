@@ -90,10 +90,11 @@
     #hint { display: none; }
   }
 </style>
+<!-- three.js r160, bundled with the server (MIT licence: vendor/three/LICENSE), so the page works offline -->
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three": "/vendor/three/build/three.module.min.js",
+  "three/addons/": "/vendor/three/examples/jsm/"
 } }
 </script>
 </head>

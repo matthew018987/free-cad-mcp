@@ -29,6 +29,7 @@ DEFAULT_PORT = 7787
 SUBDIR = ("build", "viewer")
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "viewer", "index.html")
+VENDOR = os.path.join(HERE, "viewer", "vendor")        # three.js r160 (MIT, see vendor/three/LICENSE)
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 
@@ -191,13 +192,13 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):             # stderr is the MCP server's log; keep it quiet
         pass
 
-    def _send(self, code, body, ctype):
+    def _send(self, code, body, ctype, cache="no-store"):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         if self.command != "HEAD":
@@ -217,6 +218,15 @@ class _Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def _vendor(self, path):
+        """A .js file of the bundled three.js — nothing else, and nothing outside vendor/."""
+        rel = urllib.parse.unquote(path[len("/vendor/"):])
+        p = os.path.realpath(os.path.join(VENDOR, rel))
+        if not p.endswith(".js") or not p.startswith(os.path.realpath(VENDOR) + os.sep) or not os.path.isfile(p):
+            raise NotFound("not found")
+        with open(p, "rb") as fh:
+            return self._send(200, fh.read(), "text/javascript; charset=utf-8", cache="max-age=86400")
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, "forbidden", "text/plain; charset=utf-8")
@@ -228,6 +238,8 @@ class _Handler(BaseHTTPRequestHandler):
             if u.path in ("/", "/index.html"):
                 with open(PAGE, "rb") as fh:
                     return self._send(200, fh.read(), "text/html; charset=utf-8")
+            if u.path.startswith("/vendor/"):
+                return self._vendor(u.path)
             if u.path == "/api/ping":
                 return self._json(200, {"app": APP, "home": v.home, "pid": os.getpid()})
             if u.path == "/api/projects":

@@ -77,6 +77,19 @@ try:
     code, body, ctype = get(url)
     check("/ serves the page", code == 200 and b"FreeCAD Live View" in body and ctype.startswith("text/html"),
           (code, body[:80]))
+    check("…which loads three.js from this server, not a CDN (works offline)",
+          b'"/vendor/three/build/three.module.min.js"' in body and b"cdn.jsdelivr" not in body and b"unpkg" not in body)
+    code, js, ctype = get(url + "vendor/three/build/three.module.min.js")
+    check("/vendor serves the bundled three.js as JavaScript", code == 200 and len(js) > 600000
+          and ctype.startswith("text/javascript"), (code, len(js), ctype))
+    code, js, _ = get(url + "vendor/three/examples/jsm/loaders/GLTFLoader.js")
+    check("…and the add-ons the page imports", code == 200 and b"class GLTFLoader" in js, code)
+    lic = open(os.path.join(viewer.VENDOR, "three", "LICENSE")).read()
+    check("three.js's MIT licence ships next to it", "The MIT License" in lic and "three.js authors" in lic)
+    for bad in ("vendor/three/LICENSE", "vendor/../viewer.py", "vendor/three/../../../viewer.py",
+                "vendor/%2e%2e/%2e%2e/viewer.py", "vendor/three/build/missing.js"):
+        code, _, _ = get(url + bad)
+        check("…but nothing else under /vendor: %s → 404" % bad, code == 404, code)
     code, body, _ = get(url + "api/ping")
     info = json.loads(body)
     check("/api/ping names the app and home", info.get("app") == viewer.APP and info.get("home") == home, info)

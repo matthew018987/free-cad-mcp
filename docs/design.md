@@ -517,7 +517,7 @@ non-local `Host` headers (DNS rebinding), sends no CORS headers, and serves
 only the page plus those two files inside a project that `project_dir`
 allows. All state is in the project files, so a second server for the same
 home reuses the port and takes it over when the first one exits. The page
-(`server/viewer/index.html`, three.js 0.160 from jsDelivr) polls once a
+(`server/viewer/index.html`, with three.js r160 bundled under `server/viewer/vendor/three/` (MIT), so it works offline) polls once a
 second, renders only when something changed, keeps the camera across rebuilds,
 and draws section caps with the stencil buffer.
 

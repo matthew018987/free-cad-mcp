@@ -130,8 +130,8 @@ follows whichever project was built last.
   stays on screen.
 
 Each build writes `build/viewer/scene.glb` (FreeCAD's own glTF export, one
-node per part) and `scene.json`. The page is plain three.js, loaded from
-jsDelivr, so it needs internet access the first time. The server listens
+node per part) and `scene.json`. The page uses three.js, bundled in
+`server/viewer/vendor/three/`, so it works offline. The server listens
 on 127.0.0.1 only and serves nothing but the page and those two files. Any
 running freecad-mcp server for the same home can serve the page, so it keeps
 working when Claude restarts the server.
@@ -143,6 +143,15 @@ installs the *MCP Reload* addon and macro. FreeCAD then reloads an open
 document whenever Claude rebuilds it, keeping the camera. A document with
 unsaved edits of yours is never reloaded, and nothing reloads mid-edit. Run
 the `MCP_Reload` macro to switch it off or on.
+
+## Third-party code
+
+`server/viewer/vendor/three/` holds four files of [three.js](https://threejs.org)
+r160 (`three.module.min.js`, `GLTFLoader.js`, `BufferGeometryUtils.js`,
+`OrbitControls.js`), copied unmodified from the npm package with their MIT
+licence (`server/viewer/vendor/three/LICENSE`). To update them, replace the
+files with the same paths from a newer `three` package and change the version
+in `server/viewer/index.html`.
 
 ## Configuration
 
@@ -169,7 +178,7 @@ server/                  the MCP server and the FreeCAD workers
   render.py              headless renderer
   scene.py               live viewer scene: glTF + scene.json per build
   viewer.py              live viewer web server (stdlib only)
-  viewer/                the viewer page (three.js)
+  viewer/                the viewer page; vendor/three/ is three.js r160 (MIT)
   manufacture.py         exports, DFM checks, release package
   drawing_worker.py      TechDraw drawings (in the FreeCAD GUI process)
   fea.py                 FEA: gmsh mesh, CalculiX solve, results
