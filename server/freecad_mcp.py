@@ -67,6 +67,7 @@ DRAWING_WORKER = os.path.join(HERE, "drawing_worker.py")
 sys.path.insert(0, HERE)            # -I leaves the script directory off sys.path
 import fileutil  # noqa: E402
 import standards  # noqa: E402
+import viewer as vw  # noqa: E402
 TEXT_EXT = {".py", ".json", ".md", ".txt", ".csv", ".fcmacro", ".yaml", ".yml", ".tsv"}
 # binary reference files write_file accepts as base64 (vendor STEP, datasheet PDF, reference drawing …)
 BINARY_EXT = {".step", ".stp", ".iges", ".igs", ".stl", ".obj", ".3mf", ".pdf", ".png", ".jpg", ".jpeg",
@@ -641,6 +642,7 @@ def t_freecad_status(args):
                     "plugin_root": os.environ.get("CLAUDE_PLUGIN_ROOT"), "server_dir": HERE}}
     with _jobs_lock:
         out["jobs_running"] = [j["id"] for j in _jobs.values() if j["status"] == "running"]
+    out["viewer"] = viewer_link() or ("off (FREECAD_MCP_VIEWER=0)" if not vw.enabled() else "could not start")
     if fcinfo:
         res = run_worker("probe", {}, timeout=60)
         out["version"] = res.get("text") if res.get("ok") else "probe failed: %s" % res.get("error")
@@ -1091,6 +1093,10 @@ def t_create_project(args):
                      "and plain holes by this (diametral) so they print true; tapped, insert and fit holes are not "
                      "changed. Pass compensation=0 (or a number) to fc.holes to override one feature."
                      % HOLE_COMPENSATION[process])
+    link = viewer_link(pdir)
+    if link:
+        lines.append("Live 3D viewer: %s — give the user this link (or open_in_gui(viewer=true)); it updates "
+                     "after every build." % link)
     lines.append("Next: fill requirements.md and params.json from the brief and datasheets, record each part's "
                  "process/material/finish/qty in project.json \"parts\", edit model.py, then build(project=%r)."
                  % name)
@@ -1214,6 +1220,20 @@ def t_edit_file(args):
         _rel(bak, pdir or find_project_root(p)))
 
 
+def _viewer():
+    """The live 3D viewer (viewer.py) for the current projects home, or None when it is turned off."""
+    return vw.get(home_dir(), project_dir)
+
+
+def viewer_link(pdir=None):
+    """The live viewer's URL (starting its web server on first use), for a project or the newest build."""
+    v = _viewer()
+    return v.link(pdir) if v else None
+
+
+_viewer_linked = set()          # projects whose build output already carried the viewer link
+
+
 def _append_text(content, extra):
     """Add lines to a tool result (a string, or content blocks whose first block is text)."""
     if not extra:
@@ -1260,6 +1280,14 @@ def t_build(args, request_id=None):
         if hint:
             _reload_hinted.add(pdir)
             out = _append_text(out, hint)
+    v = _viewer() if data.get("rev") and not args.get("variant") else None
+    if v:
+        v.note_built(pdir)
+        if pdir not in _viewer_linked:
+            link = v.link(pdir)
+            if link:
+                _viewer_linked.add(pdir)
+                out = _append_text(out, "viewer   %s (live 3D view; it updates after every build)" % link)
     return out
 
 
@@ -1336,6 +1364,15 @@ def t_job_status(args):
 
 
 def t_open_in_gui(args):
+    if args.get("viewer"):
+        pdir = project_dir(args["project"]) if args.get("project") else None
+        link = viewer_link(pdir)
+        if not link:
+            raise ToolError("the live viewer is off (FREECAD_MCP_VIEWER=0) or could not start")
+        import webbrowser
+        if webbrowser.open(link):
+            return "Opened the live 3D viewer in the user's browser: %s — it updates after every build." % link
+        return "Could not open a browser from here; give the user this link: %s" % link
     fcinfo = require_freecad()
     note = ""
     was_running = bool(gui_pids())
@@ -2794,6 +2831,8 @@ TOOLS = [
                     "regenerated, never over unsaved edits. Relay the reply's note as written.",
      "inputSchema": _obj({"path": {"type": "string"}, "project": _PROJECT,
                           "install_reload_helper": {"type": "boolean"},
+                          "viewer": {"type": "boolean", "description": "Open the live 3D viewer in the user's web "
+                                     "browser instead (no FreeCAD window; it follows every build)."},
                           "launch": {"type": "boolean", "description": "Default true; false only installs the helper."}})},
 ]
 TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}

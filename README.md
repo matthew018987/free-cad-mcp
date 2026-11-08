@@ -102,7 +102,7 @@ the design playbook (the `guide` tool serves the same text).
 | `export` | STEP/IGES, 3MF/STL/OBJ, BREP and DXF/SVG profiles, each verified |
 | `release` | Build, checks, manufacturability, exports, drawings, BOM and notes → zip; refuses to ship a failing design |
 | `job_status` | Collect background work |
-| `open_in_gui` | Open a file in the FreeCAD GUI; `install_reload_helper` (with your OK) installs MCP Reload |
+| `open_in_gui` | Open a file in the FreeCAD GUI; `install_reload_helper` (with your OK) installs MCP Reload; `viewer: true` opens the live 3D viewer in your browser instead |
 
 Inside `model.py`, `fc` (`server/fclib.py`) provides parameters bound to a
 spreadsheet, fully constrained sketch profiles, standard holes, reference
@@ -110,6 +110,31 @@ parts with named frames, mates, Assembly workbench joints and turned parts.
 Geometry references such as `Bracket.face(+Z)`, `Bracket.holes(d=3.4)[0]`,
 `Motor.frame(mount)` or `plane(z=8)` work in `measure`, `check_fit`, `section`
 and `checks.json`, in global coordinates.
+
+## Live 3D viewer
+
+The server runs a small web page on `http://127.0.0.1:7787/` (`freecad_status`
+and `create_project` give the link, and `open_in_gui(viewer=true)` opens it).
+Keep it open for the whole design: after every build it reloads the model and
+keeps your camera where you left it. With no `?project=` in the address it
+follows whichever project was built last.
+
+- Rotate (drag), pan (right-drag), zoom (scroll), view presets matching the
+  server's renders (Front looks toward +Y), orthographic or perspective.
+- Section along X, Y or Z with a slider; cut faces are capped.
+- Show, hide, isolate (double-click) or x-ray each part.
+- Click a part for a point's coordinates; shift-click a second point for the
+  distance and ΔX/ΔY/ΔZ.
+- Revision, build status, `checks.json` results and parameters in the side
+  panel. A failed build shows its error; if it made no geometry the last model
+  stays on screen.
+
+Each build writes `build/viewer/scene.glb` (FreeCAD's own glTF export, one
+node per part) and `scene.json`. The page is plain three.js, loaded from
+jsDelivr, so it needs internet access the first time. The server listens
+on 127.0.0.1 only and serves nothing but the page and those two files. Any
+running freecad-mcp server for the same home can serve the page, so it keeps
+working when Claude restarts the server.
 
 ## Live view in FreeCAD
 
@@ -127,6 +152,8 @@ the `MCP_Reload` macro to switch it off or on.
 | `FREECAD_PYTHON` | Interpreter `launch.sh` starts the server with (default: FreeCAD's bundled Python) |
 | `FREECAD_MCP_HOME` | Projects directory (default `~/CAD`) |
 | `FREECAD_MCP_ROOTS` | `:`-separated allow-list of directories the server may touch |
+| `FREECAD_MCP_VIEWER` | `0` turns the live 3D viewer and its scene export off |
+| `FREECAD_MCP_VIEWER_PORT` | Viewer port (default 7787; if another program holds it, a free port is used) |
 
 ## Layout
 
@@ -140,6 +167,9 @@ server/                  the MCP server and the FreeCAD workers
   fclib.py               `fc` helper library for model scripts
   analysis.py            measure, check_fit, section, checks
   render.py              headless renderer
+  scene.py               live viewer scene: glTF + scene.json per build
+  viewer.py              live viewer web server (stdlib only)
+  viewer/                the viewer page (three.js)
   manufacture.py         exports, DFM checks, release package
   drawing_worker.py      TechDraw drawings (in the FreeCAD GUI process)
   fea.py                 FEA: gmsh mesh, CalculiX solve, results

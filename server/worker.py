@@ -53,6 +53,7 @@ import fclib as fc  # noqa: E402
 import fileutil  # noqa: E402
 import manufacture as mf  # noqa: E402
 import render as rd  # noqa: E402
+import scene as sc  # noqa: E402
 import standards  # noqa: E402
 from analysis import (_axis_name, _axis_point, _canon, _is_concave, _pt, detect_holes, fmt,  # noqa: E402
                       _num, global_placement, global_shape, has_shape, is_result, results, role)
@@ -1057,6 +1058,18 @@ def _build(args, pdir, model, waited):
             images.append(png)
         except Exception as e:  # noqa: BLE001
             lines.append("render failed: %s" % e)
+    if not variant and sc.enabled():
+        # the live viewer's scene (build/viewer/): every main build, failed ones too, so the page shows the error
+        try:
+            objs = [o for o in shown if global_shape(o).Faces]
+            sc.write(pdir, render_items(doc, objs), [role(o) == "ref" for o in objs], {
+                "name": name, "rev": rev, "ok": ok, "summary": lines[0], "time": elapsed,
+                "errors": ["%s: %s" % (n, e) for n, e in errs], "script_error": script_err or None,
+                "warnings": len(report["warnings"]), "params": _json_safe(params),
+                "checks": [{"id": c.get("id"), "type": c.get("type"), "ok": bool(c.get("ok")),
+                            "value": c.get("value")} for c in check_res]})
+        except Exception as e:  # noqa: BLE001
+            lines.append("viewer   scene export failed: %s" % e)
     lines.append("files    %s%s" % (os.path.relpath(out_fc, pdir),
                                     "  ·  " + os.path.relpath(images[0], pdir) if images else ""))
     text = "\n".join(lines) + "\n"

@@ -35,7 +35,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
 PLUGIN = os.path.join(DIST, "freecad-design")
 SERVER_FILES = ["freecad_mcp.py", "worker.py", "fclib.py", "analysis.py", "render.py", "standards.py",
-                "manufacture.py", "drawing_worker.py", "drawing_support.py", "fea.py", "fileutil.py", "launch.sh", "server_instructions.md"]
+                "manufacture.py", "drawing_worker.py", "drawing_support.py", "fea.py", "fileutil.py", "scene.py", "viewer.py",
+                "launch.sh", "server_instructions.md"]
 
 
 def read(p):
@@ -551,6 +552,7 @@ def _assemble():
     os.makedirs(os.path.join(PLUGIN, "server"))
     for f in SERVER_FILES:
         shutil.copyfile(os.path.join(ROOT, "server", f), os.path.join(PLUGIN, "server", f))
+    shutil.copytree(os.path.join(ROOT, "server", "viewer"), os.path.join(PLUGIN, "server", "viewer"))
     os.chmod(os.path.join(PLUGIN, "server", "launch.sh"), 0o755)
     shutil.copytree(os.path.join(ROOT, "freecad-addon"), os.path.join(PLUGIN, "freecad-addon"),
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".*"))
