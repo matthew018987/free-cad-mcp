@@ -25,16 +25,10 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from mcp_client import FC_PY, ROOT, Client, check, fails  # noqa: E402
+from mcp_client import FC_PY, ROOT, Client, check, fails, write  # noqa: E402
 
 SERVER_DIR = os.path.join(ROOT, "server")
 FC_LIB = os.path.join(os.path.dirname(os.path.dirname(FC_PY)), "lib")
-
-
-def write(path, text):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as fh:
-        fh.write(text)
 
 
 def project(name, model, proj=None, params=None, checks=None):

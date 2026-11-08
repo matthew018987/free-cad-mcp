@@ -49,17 +49,19 @@ def shape_signature(shape):
 POCKET_MAX = 8          # pockets, slots, steps and cut-outs dimensioned per view (more → a warning)
 
 
-def _face_sample(f):
-    """A point inside the trimmed face (its parameter middle can fall in a hole of the face)."""
+def face_sample(f):
+    """A point inside the (trimmed) face and its outward normal there — the
+    parameter midpoint can fall in a hole of the face (a plate top around a pocket)."""
     u0, u1, v0, v1 = f.ParameterRange
     for fu, fv in [(0.5, 0.5)] + [((i + 0.5) / 7, (j + 0.5) / 7) for i in range(7) for j in range(7)]:
+        u, v = u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv
         try:
-            p = f.valueAt(u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv)
+            p = f.valueAt(u, v)
             if f.isInside(p, 1e-6, True):
-                return p
+                return p, f.normalAt(u, v)
         except Exception:  # noqa: BLE001
             continue
-    return None
+    return None, None
 
 
 def _plane_normal(f):
@@ -243,7 +245,7 @@ def detect_pockets(shape, d, holes=None):
         level = f.CenterOfMass.dot(d)
         if level > top - 1e-6:
             continue
-        p = _face_sample(f)
+        p, _ = face_sample(f)
         if p is None:
             continue
         ray = Part.LineSegment(p + d * eps, p + d * (top - level + 1.0)).toShape()
@@ -399,11 +401,6 @@ def content_hash(parts):
     import hashlib
     import json
     return hashlib.sha1(json.dumps(parts, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def content_signature(part, shape=None, holes=None):
-    """sha1 hex of content_parts(part): what a drawing shows beyond the shape signature."""
-    return content_hash(content_parts(part, shape, holes))
 
 
 def content_change(old, new):

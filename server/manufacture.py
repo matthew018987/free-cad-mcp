@@ -10,7 +10,6 @@ DXF profiles must come from a uniform-thickness plate.
 """
 
 import csv
-import io
 import json
 import math
 import os
@@ -200,24 +199,19 @@ def flat_profile(shape, view=None):
             "axis": "cut along %s" % ax.upper(), "seen_from": {"z": "+Z", "y": "-Y", "x": "+X"}[ax]}
 
 
-def _uv(p, origin, u, v):
-    w = p - origin
-    return (w.dot(u), w.dot(v))
-
-
 def _edge2d(e, origin, u, v):
     import fclib
     c = fclib._curve_kind(e)
     if c in ("Line", "LineSegment"):
-        return ("line", _uv(e.Vertexes[0].Point, origin, u, v), _uv(e.Vertexes[-1].Point, origin, u, v))
+        return ("line", an._uv(e.Vertexes[0].Point, origin, u, v), an._uv(e.Vertexes[-1].Point, origin, u, v))
     if c == "Circle":
-        cen = _uv(e.Curve.Center, origin, u, v)
+        cen = an._uv(e.Curve.Center, origin, u, v)
         r = e.Curve.Radius
         if e.isClosed():
             return ("circle", cen, r)
-        p0 = _uv(e.Vertexes[0].Point, origin, u, v)
-        p1 = _uv(e.Vertexes[-1].Point, origin, u, v)
-        pm = _uv(e.valueAt((e.FirstParameter + e.LastParameter) / 2), origin, u, v)
+        p0 = an._uv(e.Vertexes[0].Point, origin, u, v)
+        p1 = an._uv(e.Vertexes[-1].Point, origin, u, v)
+        pm = an._uv(e.valueAt((e.FirstParameter + e.LastParameter) / 2), origin, u, v)
         a0 = math.degrees(math.atan2(p0[1] - cen[1], p0[0] - cen[0]))
         a1 = math.degrees(math.atan2(p1[1] - cen[1], p1[0] - cen[0]))
         am = math.degrees(math.atan2(pm[1] - cen[1], pm[0] - cen[0]))
@@ -225,7 +219,7 @@ def _edge2d(e, origin, u, v):
         if not _ccw_contains(a0, a1, am):
             a0, a1 = a1, a0
         return ("arc", cen, r, a0 % 360, a1 % 360)
-    pts = [_uv(p, origin, u, v) for p in e.discretize(Deflection=0.01)]
+    pts = [an._uv(p, origin, u, v) for p in e.discretize(Deflection=0.01)]
     return ("poly", pts)
 
 
@@ -788,21 +782,6 @@ def _fn(f, p):
         return f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
 
 
-def _face_sample(f):
-    """A point inside the (trimmed) face and its outward normal there — the
-    parameter midpoint can fall in a hole of the face (a plate top around a pocket)."""
-    u0, u1, v0, v1 = f.ParameterRange
-    for fu, fv in [(0.5, 0.5)] + [((i + 0.5) / 7, (j + 0.5) / 7) for i in range(7) for j in range(7)]:
-        u, v = u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv
-        try:
-            p = f.valueAt(u, v)
-            if f.isInside(p, 1e-6, True):
-                return p, f.normalAt(u, v)
-        except Exception:  # noqa: BLE001
-            continue
-    return None, None
-
-
 def _ray_tester(shape):
     """free(q, u, length): True when the ray from q (a point in free space)
     meets no face of shape. Only the faces whose bounding box the ray crosses
@@ -836,6 +815,7 @@ def machining_access(shape):
     setup along their axis can cut) with the wall depth at each, and the
     radii of concave cylinders a setup across their axis reaches (floor
     fillets, grooves, half-bores: ball/bull-nose features)."""
+    import drawing_support as ds
     bb = an.tight_bb(shape)
     diag = bb.DiagonalLength
     eps = max(0.02, 1e-4 * diag)
@@ -847,7 +827,7 @@ def machining_access(shape):
     for f in shape.Faces:
         if f.Area < 1e-6:
             continue
-        p, n = _face_sample(f)
+        p, n = ds.face_sample(f)
         if p is None:
             continue
         srf = f.Surface.__class__.__name__

@@ -65,6 +65,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(HERE, "worker.py")
 DRAWING_WORKER = os.path.join(HERE, "drawing_worker.py")
 sys.path.insert(0, HERE)            # -I leaves the script directory off sys.path
+import fileutil  # noqa: E402
 import standards  # noqa: E402
 TEXT_EXT = {".py", ".json", ".md", ".txt", ".csv", ".fcmacro", ".yaml", ".yml", ".tsv"}
 # binary reference files write_file accepts as base64 (vendor STEP, datasheet PDF, reference drawing …)
@@ -181,14 +182,6 @@ def backup_file(path, pdir=None):
 def _rel(path, pdir):
     """path relative to the project when it is inside it (for messages)."""
     return os.path.relpath(path, pdir) if pdir and _inside(path, pdir) else path
-
-
-def _sha1(path):
-    h = hashlib.sha1()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _read_json(path, default=None):
@@ -708,11 +701,8 @@ def install_reload_helper():
 
 
 def playbook_path():
-    for p in (os.path.join(HERE, "playbook.md"),
-              os.path.join(HERE, "..", "skills", "freecad-design", "SKILL.md")):
-        if os.path.isfile(p):
-            return os.path.abspath(p)
-    return None
+    p = os.path.join(HERE, "..", "skills", "freecad-design", "SKILL.md")
+    return os.path.abspath(p) if os.path.isfile(p) else None
 
 
 def load_playbook():
@@ -1611,7 +1601,7 @@ def save_drawing_options(pdir, parts, overrides, reset, sheets_out=(), rev=None,
             d = sh.get("document")
             if d and os.path.isfile(d) and sh.get("part"):
                 ok, tot = _dims_verified(sh)
-                rec = {"file": os.path.relpath(d, pdir), "sha1": _sha1(d), "rev": rev, "dims": ok, "dims_total": tot}
+                rec = {"file": os.path.relpath(d, pdir), "sha1": fileutil.sha1(d), "rev": rev, "dims": ok, "dims_total": tot}
                 if hashes.get(sh["part"], hashes.get(None)):
                     rec["spec_hash"] = hashes.get(sh["part"], hashes.get(None))
                 if sh.get("ops_failed"):
@@ -1646,22 +1636,8 @@ def _sheet_family(doc):
     return folder, (m.group(1) if m else os.path.splitext(fn)[0])
 
 
-def sheet_revisions(folder, stem):
-    """[(n, path)] oldest first — <stem>.FCStd is 0, <stem>.rNN.FCStd is NN."""
-    try:
-        names = os.listdir(folder)
-    except OSError:
-        return []
-    out = []
-    for fn in names:
-        m = re.match(r"^%s(?:\.r(\d{2,}))?\.fcstd$" % re.escape(stem), fn, re.I)
-        if m:
-            out.append((int(m.group(1) or 0), os.path.join(folder, fn)))
-    return sorted(out)
-
-
 def newest_sheet(folder, stem):
-    revs = sheet_revisions(folder, stem)
+    revs = fileutil.revisions(folder, stem)
     return revs[-1][1] if revs else None
 
 
@@ -1687,7 +1663,7 @@ def sheet_edited(pdir, label, path):
         return "no record of drawing create making it, so it may hold hand edits"
     if os.path.abspath(os.path.join(pdir, rec["file"])) != os.path.abspath(path):
         return "a revision saved by drawing edit"
-    if not os.path.isfile(path) or _sha1(path) != rec.get("sha1"):
+    if not os.path.isfile(path) or fileutil.sha1(path) != rec.get("sha1"):
         return "changed since drawing create saved it"
     return ""
 
@@ -1695,15 +1671,7 @@ def sheet_edited(pdir, label, path):
 def reserve_revision(doc):
     """Claim <stem>.rNN.FCStd after the newest revision with an O_EXCL placeholder, so two
     edits at the same time never write the same file."""
-    folder, stem = _sheet_family(doc)
-    n = max([r for r, _ in sheet_revisions(folder, stem)] + [0]) + 1
-    while True:
-        p = os.path.join(folder, "%s.r%02d.FCStd" % (stem, n))
-        try:
-            os.close(os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
-            return p
-        except FileExistsError:
-            n += 1
+    return fileutil.reserve_revision(*_sheet_family(doc))
 
 
 def _drop_placeholder(path):
@@ -1762,7 +1730,7 @@ def _set_aside_revisions(pdir, sheets_out):
         if not sh.get("document"):
             continue
         folder, stem = _sheet_family(sh["document"])
-        for n, p in sheet_revisions(folder, stem):
+        for n, p in fileutil.revisions(folder, stem):
             if n > 0:
                 out.append((p, backup_file(p, pdir)))
                 os.remove(p)
@@ -2015,7 +1983,7 @@ def package_signature(pdir, args):
         ddir = os.path.join(pdir, "drawings")
         for fn in sorted(os.listdir(ddir)) if os.path.isdir(ddir) else ():
             if fn.lower().endswith(".fcstd") and os.path.isfile(os.path.join(ddir, fn)):
-                sheets[fn] = _sha1(os.path.join(ddir, fn))
+                sheets[fn] = fileutil.sha1(os.path.join(ddir, fn))
     detail = {"args": a, "sheets": sheets}
     return hashlib.sha1(json.dumps(detail, sort_keys=True, default=str).encode("utf-8")).hexdigest(), detail
 
@@ -2358,7 +2326,7 @@ def t_release(args, request_id=None):
             for fn in sorted(files):
                 if fn != ".release.json":
                     shipped[os.path.relpath(os.path.join(root, fn), rel).replace(os.sep, "/")] = \
-                        _sha1(os.path.join(root, fn))
+                        fileutil.sha1(os.path.join(root, fn))
         with open(os.path.join(rel, ".release.json"), "w") as fh:
             json.dump({"rev": rev, "inputs_sha1": inputs, "package_sha1": psig, "package_args": pdetail["args"],
                        "sheets": pdetail["sheets"], "files": shipped, "checks": cur_checks, "released": time.time(),

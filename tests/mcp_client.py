@@ -84,5 +84,11 @@ def check(label, ok, detail=""):
         fails.append(label)
 
 
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(text)
+
+
 def images(content):
     return [c for c in content if c["type"] == "image"]

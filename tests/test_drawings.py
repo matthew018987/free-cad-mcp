@@ -23,16 +23,10 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from mcp_client import ROOT, Client, check, fails, images  # noqa: E402
+from mcp_client import ROOT, Client, check, fails, images, write  # noqa: E402
 
 sys.path.insert(0, os.path.join(ROOT, "server"))
 import drawing_support as ds  # noqa: E402  (stdlib-only part)
-
-
-def write(path, text):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as fh:
-        fh.write(text)
 
 
 def project(name, model, proj, params):

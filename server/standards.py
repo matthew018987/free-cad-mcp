@@ -111,10 +111,8 @@ GT_LINEAR = {"f": [0.05, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, None],
              "c": [0.2, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 4.0],
              "v": [None, 0.5, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0]}
 # external radii and chamfer heights ("broken edges"): 0.5–3, >3–6, >6
-GT_EDGE_BANDS = [3, 6, None]
 GT_EDGE = {"f": [0.2, 0.5, 1.0], "m": [0.2, 0.5, 1.0], "c": [0.4, 1.0, 2.0], "v": [0.4, 1.0, 2.0]}
 # angles, by the length of the shorter leg: ≤10, >10–50, >50–120, >120–400, >400 (± minutes of arc)
-GT_ANGLE_BANDS = [10, 50, 120, 400, None]
 GT_ANGLE = {"f": [60, 30, 20, 10, 5], "m": [60, 30, 20, 10, 5], "c": [90, 60, 30, 15, 10],
             "v": [180, 120, 60, 30, 20]}
 GT_NAMES = {"f": "fine", "m": "medium", "c": "coarse", "v": "very coarse"}
@@ -590,12 +588,6 @@ def general_tolerance(cls, d):
     if v is None:
         raise ValueError("ISO 2768-%s defines no general tolerance for %g mm — state an explicit tolerance" % (k, d))
     return v
-
-
-def general_angle_tolerance(cls, length):
-    """ISO 2768-1 angular ± deviation in degrees for the shorter leg `length` (mm)."""
-    k = parse_general_class(cls)
-    return GT_ANGLE[k][_gt_band(GT_ANGLE_BANDS, float(length))] / 60.0
 
 
 def _arcmin(m):

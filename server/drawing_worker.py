@@ -708,7 +708,6 @@ def plan_content(shape, style, axis, apt, views, holes, specs, dims_auto, steps=
     if not dims_auto or not views:
         return c
     names = [n for n, _, _ in views]
-    bb = an.tight_bb(shape)
     if style == "turned":
         zs = turned_steps(shape, axis) if axis is not None else []
         c[names[0]]["nx"] += max(0, len(zs) - 1) + (1 if any(st.get("thread") for st in steps or []) else 0)
