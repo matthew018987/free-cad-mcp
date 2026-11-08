@@ -2444,10 +2444,7 @@ TOOLS = [
     {"name": "create_project", "handler": t_create_project,
      "description": "Scaffold a project directory: project.json (process, material, drawing defaults, the "
                     "part's entry in \"parts\" keyed by its body label), params.json, model.py, requirements.md, "
-                    "checks.json, refs/ build/ out/. The part template's starter model suits the process: fdm/sla "
-                    "a plate with clearance holes, cnc a block with a radiused pocket and tapped holes, turning an "
-                    "fc.turned shaft with chamfered ends, laser a uniform plate with holes, sheet a bent bracket "
-                    "(fc.sheet_metal: flanges, bends, flat pattern). fdm/sla projects "
+                    "checks.json, refs/ build/ out/, with a starter model that suits the process. fdm/sla projects "
                     "get dfm.hole_compensation_mm (0.2 / 0.1 mm, diametral): fc.holes adds it to clearance and "
                     "plain holes so they print true (not to tapped, insert or fit holes; compensation= overrides "
                     "per feature).",
@@ -2495,18 +2492,13 @@ TOOLS = [
                           "replace_all": {"type": "boolean"}}, ["path", "old_text", "new_text"])},
     {"name": "build", "handler": t_build, "wants_request_id": True,
      "description": "Run the project's model.py in a fresh FreeCAD document, save build/<name>.FCStd and "
-                    "return the BUILD REPORT: per-object validity, volume, mass, bbox; every PartDesign "
-                    "feature with its error message (a failed feature is invisible in renders — FreeCAD "
-                    "keeps the last good shape); hole specs (with any print hole compensation); sketch "
-                    "DoF/conflicts; script errors with model.py line; checks.json acceptance checks (✓/✗ with "
-                    "measured values — types: valid, bbox, bound/min_z…, mass, volume, distance, clearance, "
+                    "return the build report (validity, mass, every feature's errors, holes, sketch status, "
+                    "checks.json results, Δ against the previous build) plus a render. Read the whole report "
+                    "every time: a failed feature is invisible in renders because FreeCAD keeps the last good "
+                    "shape. checks.json types: valid, bbox, bound/min_z…, mass, volume, distance, clearance, "
                     "interference, radial_gap, coaxial, align, pattern, parallel, perpendicular, coplanar, "
-                    "hole_count, hole_diameter (holes + d; nominal=true compares with the design Ø before print "
-                    "compensation), positions, face_count — guide('checks')); warnings; Δ against the previous build; plus a render. Read the whole "
-                    "report every time. Unchanged inputs keep the same revision. params overrides parameters "
-                    "without editing params.json; variant writes a separate file for what-if builds. If the user "
-                    "edited the build file in the FreeCAD GUI, build refuses and lists the edits "
-                    "(adopt_gui_params copies parameter edits back).",
+                    "hole_count, hole_diameter, positions, face_count — guide('checks'). If the user edited the "
+                    "build file in the FreeCAD GUI, build refuses and lists the edits.",
      "inputSchema": _obj({
          "project": _PROJECT,
          "params": {"type": "object", "description": "Parameter overrides, e.g. {\"thickness\": 6}."},
@@ -2525,8 +2517,7 @@ TOOLS = [
                     "Vector and doc predefined. Use it to query anything the other tools don't report, or to "
                     "patch an existing user model: save='revision' writes <name>.rNN.FCStd and never touches "
                     "the original; 'inplace' keeps a .bak. Return data with fc.result(key=value). Do not use "
-                    "it to edit a project's built file — change model.py and build instead. Images (views) go to "
-                    "the project's out/, or ~/.cache/freecad-mcp/images for a file outside a project.",
+                    "it to edit a project's built file — change model.py and build instead.",
      "inputSchema": _obj({
          "code": {"type": "string"}, "doc": _DOC, "project": _PROJECT,
          "save": {"type": "string", "enum": ["no", "revision", "inplace"], "description": "Default no."},
@@ -2551,14 +2542,12 @@ TOOLS = [
                                                    "(e.g. in the FreeCAD GUI) since the last build."},
                           "max_faces": {"type": "integer"}, "timeout": {"type": "integer"}})},
     {"name": "render", "handler": t_render, "wants_request_id": True,
-     "description": "Headless image of a document: one labelled grid of views at a common scale with a "
-                    "scale bar and axis triad. style shaded | xray (see internal features) | drawing (black "
+     "description": "Headless image of a document. style shaded | xray (see internal features) | drawing (black "
                     "visible lines, dashed hidden lines — compare against a reference drawing). section cuts "
                     "the model and hatches the cut faces: {\"y\": 20} removes the side toward the standard "
                     "viewer (+X, −Y, +Z; add \"flip\": true for the other side) or {point, normal} removes "
-                    "the +normal side. highlight colours chosen objects and greys the rest. Without out_path the "
-                    "image goes to the project's out/ (for a file outside a project: ~/.cache/freecad-mcp/images "
-                    "— never next to the user's file). Images orient you; they do not prove fit.",
+                    "the +normal side. highlight colours chosen objects and greys the rest. Images orient you; "
+                    "they do not prove fit.",
      "inputSchema": _obj({
          "doc": _DOC, "project": _PROJECT, "views": _VIEWS,
          "objects": {"type": "array", "items": {"type": "string"}, "description": "Only these objects."},
@@ -2619,12 +2608,11 @@ TOOLS = [
     {"name": "section", "handler": t_section, "wants_request_id": True,
      "description": "Cut the model with a plane and analyse the 2D section: each body's area and extent, and "
                     "every pair's in-plane gap (or overlap = interference; for touching parts, the nearest real "
-                    "gap). Returns a hatched, dimensioned plot with zoomed insets of the tightest gaps. plane "
+                    "gap), with a dimensioned plot. plane "
                     "{\"z\": 12} is viewed from +Z, {\"y\": 0} from −Y (like the front view), {\"x\": 5} "
                     "from +X; or {point, normal}. Cut through hole and shaft axes to check clearances (a cut "
                     "containing an axis reports the gap on each side of it). interference_ok / contact_ok take the "
-                    "same pair lists as check_fit, so intended thread overlaps and contacts are not flagged. The plot "
-                    "is saved in the project's out/ (for a file outside a project: ~/.cache/freecad-mcp/images).",
+                    "same pair lists as check_fit, so intended thread overlaps and contacts are not flagged.",
      "inputSchema": _obj({"doc": _DOC, "project": _PROJECT, "plane": {"type": "object"},
                           "objects": {"type": "array", "items": {"type": "string"}},
                           "min_clearance": {"type": "number"}, "within": {"type": "number"},
@@ -2675,25 +2663,15 @@ TOOLS = [
                           "timeout": {"type": "integer"}})},
     {"name": "drawing", "handler": t_drawing, "wants_request_id": True,
      "description": "Technical drawings (FreeCAD TechDraw, ISO). action=create: one sheet per manufactured part "
-                    "(or part/parts): detects the style (from the part's process first — laser/sheet → plate, turning → turned — then the shape: "
-                    "prismatic → front/top/left first-angle + iso; plate → edge + face view; turned → side view "
-                    "with the axis horizontal + end view, a Ø dimension per step, fits and thread callouts on their "
-                    "own steps, baseline lengths, and SECTION A-A through the axis when the part has a bore (section="
-                    "auto|full|none); bent sheet (fc.sheet_metal) → three views, bend table and a flat-pattern view), "
-                    "picks paper and the largest standard scale that fits, adds overall, hole-position and pocket "
-                    "dimensions (size, location, depth, corner radii), hole/thread callouts from the Hole features (e.g. '4× ⌀3.4 THRU ⌴ "
-                    "⌀6.5 ↧3.4', '2× M3×0.5-6H ↧5', '⌀8 H7 THRU'), notes (material, ISO 2768 general tolerance, "
-                    "process notes) and the title block (revision = the build revision it was drawn from); checks every "
-                    "dimension against the model; hidden=true shows hidden lines on the orthographic views (turned "
-                    "parts show them on the side view by default); hole_dims=\"pitch\" dimensions a hole pattern by "
-                    "its pitch plus one location from a datum edge (default \"baseline\": every hole from the edges); "
-                    "section=\"full\" always draws a turned part's section A-A through the axis, \"none\" never "
-                    "(default \"auto\": when it has bores or other internal features); saves "
+                    "(or part/parts), fully automatic: the view style comes from the part's process, then its shape "
+                    "(prismatic, plate, turned, bent sheet); paper, scale, dimensions, hole/thread callouts, notes and "
+                    "the title block are added and every dimension is checked against the model. Options such as "
+                    "hidden=true, hole_dims=\"pitch\" and section are described with their fields. Saves "
                     "drawings/<Part>.FCStd, exports PDF/SVG/DXF/PNG to out/drawings and returns a preview. The "
                     "options you pass (only those) are saved in drawings.json — under the part, or for every part "
                     "without part — and reused by later creates and by release; reset=true clears that part's "
-                    "saved options first (without part: \"*\" and every part's, create ops included — the sheets "
-                    "are drawn without them); scale/paper \"auto\" go back to automatic. ops on create (one part) are "
+                    "saved options first (without part: \"*\" and every part's, create ops included); scale/paper "
+                    "\"auto\" go back to automatic. ops on create (one part) are "
                     "edit ops saved with the part and replayed on every regeneration, release included — use them "
                     "for additions that must survive. action=read: describe a drawing's pages, views, dimensions "
                     "and notes with a preview (default: the project's newest sheet). action=edit: ops on one sheet "
@@ -2706,13 +2684,10 @@ TOOLS = [
                     "page mm, or with align=\"left\" the left end of the first line's baseline; append_note {text} "
                     "adds a numbered line to the generated NOTES block; set_title {fields}; move {name, x, y}; "
                     "remove {name} or remove {match: {view, value, type}} (every generated dimension that matches — "
-                    "use it in create ops, which are replayed after regenerations renumber the dimensions; a remove "
-                    "that matches nothing is reported as failed). Notes you pass are kept exactly as written (not "
-                    "upper-cased). Edits save a new revision <Part>.rNN.FCStd whose title-block revision gets an "
-                    "edit suffix (r0001 → r0001.1 for .r01) (or save='inplace', backup in .history/backups) and "
-                    "change only that file — a later create regenerates the sheet and sets hand-edited revisions "
-                    "aside. Each call runs FreeCAD in the background for a few seconds (no splash screen; on macOS "
-                    "nothing appears on screen).",
+                    "use it in create ops, which are replayed after regenerations renumber the dimensions). Notes "
+                    "you pass are kept exactly as written (not upper-cased). Edits save a new revision "
+                    "<Part>.rNN.FCStd (or save='inplace') and change only that file — a later create regenerates "
+                    "the sheet and sets hand-edited revisions aside.",
      "inputSchema": _obj({
          "action": {"type": "string", "enum": ["create", "read", "edit"], "description": "Default create."},
          "project": _PROJECT,
@@ -2759,26 +2734,19 @@ TOOLS = [
                                                           "(saves a new revision after the newest)."},
          "return_image": {"type": "boolean"}, "timeout": {"type": "integer"}})},
     {"name": "analyze", "handler": t_analyze, "wants_request_id": True,
-     "description": "FEA of one part, or of several parts bonded together (gmsh tet10 mesh, CalculiX on all cores). "
+     "description": "FEA of one part, or of several parts bonded together (gmsh tet10 mesh, CalculiX). "
                     "Rebuilds first, then solves a case: `fixed` — faces/holes that are held (geometry references: "
                     "\"Bracket.holes(d=5.5)\" for bolted holes, \"Bracket.face(-Z)\" for a clamped face); `loads` — "
                     "[{\"ref\": face/hole, \"force\": N, \"direction\": \"-Z\" | [x,y,z]}, {\"ref\": …, \"force\": "
                     "[fx,fy,fz]}, {\"ref\": …, \"pressure\": MPa (pushes on the face)}] (a force is spread over the "
-                    "referenced faces); gravity=true adds self weight. analysis=\"static\" (default): max von Mises "
-                    "stress and where (also away from the supports, where rigid fixtures inflate it), safety factor "
-                    "against yield, max displacement and where, support reactions vs the applied load (equilibrium ✓). "
-                    "analysis=\"frequency\": the first `modes` (default 6) natural frequencies and mode shapes with the "
-                    "supports as given (loads are not used; needs the material density). analysis=\"buckling\": linear "
-                    "buckling load factors of the given loads (default 3 modes) — the lowest positive one is how many "
-                    "times the load buckles the part. Several parts: parts=[\"Base\", \"Bracket\"] with bonded=[[\"Base."
-                    "face(+Z)\", \"Bracket.face(-Z)\"], …] — face/hole pairs on two parts that touch and are glued, "
-                    "clamped or pressed together (tied, CalculiX *TIE); supports and loads may be on any of the parts; "
-                    "results per part, each against its own material. Material from project.json parts (E, ν, yield, "
-                    "density from the material table) or material={\"E\": MPa, \"nu\": …, \"yield\": MPa, \"density\": "
-                    "g/cm³} / a material name. refine re-solves on a finer mesh to show convergence: by default only "
-                    "when the first mesh is small (≤ 50 000 nodes — the default mesh puts ≥ 2 elements through the "
-                    "thinnest wall; the reply says when it skipped), true forces it, false skips it. Returns "
-                    "an image (stress/deflection, or the mode shapes). The case is saved in fea.json under `case` "
+                    "referenced faces); gravity=true adds self weight. analysis=\"static\" (default): von Mises "
+                    "stress, safety factor against yield, displacement and support reactions; \"frequency\": natural "
+                    "frequencies and mode shapes (loads are not used; needs the material density); \"buckling\": "
+                    "buckling load factors of the given loads. Several parts: parts=[\"Base\", \"Bracket\"] with "
+                    "bonded=[[\"Base.face(+Z)\", \"Bracket.face(-Z)\"], …] — face/hole pairs on two parts that touch "
+                    "and are glued, clamped or pressed together (CalculiX *TIE); supports and loads may be on any of "
+                    "the parts. Material from project.json parts or material={\"E\": MPa, \"nu\": …, \"yield\": MPa, "
+                    "\"density\": g/cm³} / a material name. The case is saved in fea.json under `case` "
                     "(default 'default') — re-run it by name; checks.json fea_safety / fea_stress / fea_displacement "
                     "(static), fea_frequency (first natural frequency ≥ min Hz) and fea_buckling (lowest positive "
                     "buckling factor ≥ min) use the latest result and go stale when the model or case changes (release "
@@ -2810,12 +2778,9 @@ TOOLS = [
                           "timeout": {"type": "integer"}}, required=["project"])},
     {"name": "check_manufacturing", "handler": t_check_manufacturing, "wants_request_id": True,
      "description": "Design-for-manufacture checks per part for its process (from project.json parts.<name>.process, "
-                    "else the project process, or the process argument): fdm/sla → best print orientation (least "
-                    "overhang, most bed contact), overhang area, build-volume fit, thinnest wall, tiny holes, sagging "
-                    "horizontal holes, tapped plastic threads; cnc → sharp internal corners a cutter can't make, thin "
-                    "walls, deep holes, setup count; turning → lathe-part check, bar size, L/D (tailstock), secondary "
-                    "ops, threads; laser/sheet → uniform plate, holes smaller than the thickness. Verdict per part: "
-                    "ready / review warnings / not manufacturable.",
+                    "else the project process, or the process argument): print orientation and overhangs, walls, "
+                    "holes, internal corners, tool access, bar stock, plate uniformity and the like. Verdict per "
+                    "part: ready / review warnings / not manufacturable.",
      "inputSchema": _obj({"doc": _DOC, "project": _PROJECT,
                           "objects": {"type": "array", "items": {"type": "string"}},
                           "process": {"type": "string", "enum": ["fdm", "sla", "cnc", "turning", "laser", "sheet"]},
@@ -2823,23 +2788,14 @@ TOOLS = [
     {"name": "release", "handler": t_release, "wants_request_id": True,
      "description": "Make the supplier package in one step. Rebuilds model.py and stops if the build has errors, "
                     "if the build file has unported GUI edits, if any checks.json check fails, if a part is not "
-                    "manufacturable for its process, if project.json parts / qty / processes name a part that "
-                    "doesn't exist, or if an exported file fails verification. Then exports each part for its "
-                    "process (fdm/sla → 3MF + STL oriented for printing + STEP; cnc/turning → STEP + PDF drawing; "
-                    "laser → DXF + SVG + PDF drawing), writes BOM.csv (made parts and bom=\"buy\" reference "
-                    "parts) and README.md (what to send to whom, quantities, material, finish, print orientation, "
-                    "hole compensation, bar stock, holes, fits, threads, notes, verification table, checks changed "
-                    "since the previous release, build report) and zips release/<name>_<rev>.zip. An earlier "
-                    "package is replaced only if it was made from the same inputs AND holds the same package (parts, "
-                    "qty, process(es), drawing mode and sheets); otherwise this one gets a -2 suffix. Drawings "
-                    "(auto): a part's saved sheet in drawings/ is shipped as is when it still matches the model "
-                    "(shape, hole positions, fits, threads) and what it is drawn from (saved options, material, "
-                    "finish, notes, title block, general tolerance) — its title block keeps the revision it was "
-                    "drawn or edited at; a stale one is regenerated with its saved options and create ops and saved "
-                    "back — but if it was edited by hand, release stops and says how to proceed. If saved create ops "
-                    "fail on a sheet, release stops (allow_failed_ops=true ships it without them, with the user's "
-                    "OK). Processes, quantities, materials and finishes come from project.json parts.<label> (or the "
-                    "arguments).",
+                    "manufacturable for its process, if project.json names a part that doesn't exist, if a "
+                    "hand-edited drawing or failed create ops are in the way, or if an exported file fails "
+                    "verification — the reply says why and how to proceed. Then exports each part for its process "
+                    "(fdm/sla → 3MF + STL + STEP; cnc/turning → STEP + PDF drawing; laser → DXF + SVG + PDF "
+                    "drawing), reuses current drawings and regenerates stale ones, writes BOM.csv (made parts and "
+                    "bom=\"buy\" reference parts) and README.md, and zips release/<name>_<rev>.zip. Processes, "
+                    "quantities, materials and finishes come from project.json parts.<label> (or the arguments). "
+                    "Use the allow_* overrides only with the user's explicit OK.",
      "inputSchema": _obj({"project": _PROJECT,
                           "parts": {"type": "array", "items": {"type": "string"}},
                           "process": {"type": "string", "enum": ["fdm", "sla", "cnc", "turning", "laser", "sheet"],
@@ -2868,10 +2824,7 @@ TOOLS = [
                     "starting FreeCAD if needed. install_reload_helper=true (only with the user's OK — it adds "
                     "an addon to their FreeCAD Mod folder and the MCP_Reload macro to their macro folder) installs "
                     "MCP Reload: open documents then reload automatically whenever a build or drawing is "
-                    "regenerated, keeping the camera, and never over unsaved edits. It starts with FreeCAD; if "
-                    "FreeCAD is already running, the user runs Macro ▸ Macros… ▸ MCP_Reload once — unless it was "
-                    "installed before and FreeCAD's Report view already shows 'MCP Reload: watching' (the macro is "
-                    "a toggle: running it then stops the helper). Relay the reply's note as written.",
+                    "regenerated, never over unsaved edits. Relay the reply's note as written.",
      "inputSchema": _obj({"path": {"type": "string"}, "project": _PROJECT,
                           "install_reload_helper": {"type": "boolean"},
                           "launch": {"type": "boolean", "description": "Default true; false only installs the helper."}})},
