@@ -529,6 +529,7 @@ workflow never depends on path mapping.
 | `server/fclib.py` | `fc` inside scripts: params ↔ spreadsheet binding, fully constrained profiles, features, selectors, holes, ref parts, frames, mates, patterns |
 | `server/render.py` | Headless renderer: vectorised z-buffer, BREP edges, silhouettes, hidden lines, sections with hatching, view grids; highlighted items over wireframe context |
 | `server/analysis.py` | Worker side: introspection in global coordinates (containers, links), hole detection, geometry references, `measure`, `check_fit`, `section` (+ matplotlib plot with zoomed insets), `checks.json` evaluation, snapshots and GUI-edit diffs |
+| `server/fileutil.py` | Stdlib helpers shared by the server and the workers: file hashes and numbered revisions (`<stem>.rNN.FCStd`) |
 | `server/standards.py` | Stdlib tables shared by the server and fclib: ISO 261/262, 273, 4762 + DIN 974-1, 10642, 7380, 4032, 7089, ISO 286 (IT6–8, up to 250 mm), heat-set inserts (vendor-typical), process rules |
 | `tests/test_core_loop.py` | M1: end-to-end checks over stdio with real FreeCAD (50) |
 | `tests/test_verification.py`, `tests/fixtures/fitlab/` | M2: verification against a fixture with known answers (56) |

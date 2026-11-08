@@ -12,7 +12,6 @@ container chain. Links (App::Link) are resolved through Part.getShape.
 import itertools
 import json
 import math
-import os
 import re
 
 import FreeCAD as App
@@ -2737,7 +2736,7 @@ def _explained_by_params(change, rec, param_changes):
 def _num(v):
     if v is None:
         return "∅"
-    if isinstance(v, float) and v == int(v):
+    if isinstance(v, float) and math.isfinite(v) and v == int(v):
         return str(int(v))
     return str(v)
 

@@ -50,11 +50,12 @@ import Sketcher  # noqa: E402
 import analysis as an  # noqa: E402
 import fea  # noqa: E402
 import fclib as fc  # noqa: E402
+import fileutil  # noqa: E402
 import manufacture as mf  # noqa: E402
 import render as rd  # noqa: E402
 import standards  # noqa: E402
 from analysis import (_axis_name, _axis_point, _canon, _is_concave, _pt, detect_holes, fmt,  # noqa: E402
-                      global_placement, global_shape, has_shape, is_result, results, role)
+                      _num, global_placement, global_shape, has_shape, is_result, results, role)
 
 
 class UserError(Exception):
@@ -772,11 +773,6 @@ def _revs(pdir):
     return sorted(d for d in os.listdir(h) if re.match(r"^r\d{4}$", d))
 
 
-def _last_rev(pdir):
-    revs = _revs(pdir)
-    return revs[-1] if revs else None
-
-
 def _new_rev(pdir, after):
     """Allocate the next rNNNN folder; mkdir is atomic, so two builds never get the same one."""
     n = int(after[1:]) + 1 if after else 1
@@ -877,7 +873,7 @@ def _build(args, pdir, model, waited):
     notes = []
     if waited > 0.5:
         notes.append("waited %.1f s for another build of this project to finish" % waited)
-    disk_sha = _sha1(out_fc) if os.path.exists(out_fc) else None
+    disk_sha = fileutil.sha1(out_fc) if os.path.exists(out_fc) else None
     lb_key = _lb_key(pdir, out_fc)
     rec = _lb_record(last_builds, lb_key, out_fc, disk_sha)
     if disk_sha and isinstance(rec, (int, float)):   # record from an older server version
@@ -972,7 +968,7 @@ def _build(args, pdir, model, waited):
     tail = os.sep + lb_key.replace("/", os.sep)
     for k in [k for k in last_builds if os.path.isabs(k) and k.endswith(tail)]:
         del last_builds[k]                       # an older server's absolute key for this file
-    last_builds[lb_key] = {"sha1": _sha1(out_fc), "mtime": os.path.getmtime(out_fc), "rev": rev}
+    last_builds[lb_key] = {"sha1": fileutil.sha1(out_fc), "mtime": os.path.getmtime(out_fc), "rev": rev}
     with open(lb_path, "w") as fh:
         json.dump(last_builds, fh, indent=1)
     with open(snap_path, "w") as fh:
@@ -1124,7 +1120,7 @@ def _reads(pdir, paths):
 
 def _file_sha(p):
     try:
-        return _sha1(p) if os.path.isfile(p) else None
+        return fileutil.sha1(p) if os.path.isfile(p) else None
     except OSError:
         return None
 
@@ -1168,15 +1164,6 @@ def _backup_build(pdir, out_fc):
     p = _backup_name(bdir, os.path.splitext(os.path.basename(out_fc))[0], ".FCStd")
     shutil.copy2(out_fc, p)
     return p
-
-
-def _sha1(path):
-    import hashlib
-    h = hashlib.sha1()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def gui_changes(pdir, out_fc, snap_path, model, args):
@@ -1309,41 +1296,11 @@ def _patch_json(text, old, want):
     return text
 
 
-def _num(v):
-    if isinstance(v, float) and math.isfinite(v) and v == int(v):
-        return str(int(v))
-    return str(v)
-
-
 def _revision_base(docpath):
     """(path stem without .rNN, own revision number): Plate.r02.FCStd → (Plate, 2), Plate.step → (Plate, 0)."""
     stem = os.path.splitext(docpath)[0]
     m = re.search(r"\.r(\d{2,})$", stem)
     return (stem[:m.start()], int(m.group(1))) if m else (stem, 0)
-
-
-def _revisions(stem):
-    """{n: path} of the <stem>.rNN.FCStd files that exist."""
-    d, b = os.path.split(stem)
-    out = {}
-    for f in os.listdir(d or "."):
-        m = re.match(re.escape(b) + r"\.r(\d{2,})\.FCStd$", f, re.I)
-        if m:
-            out[int(m.group(1))] = os.path.join(d, f)
-    return out
-
-
-def _reserve_revision(stem):
-    """Claim the next free <stem>.rNN.FCStd with an O_EXCL placeholder, so two
-    patches started together never write the same revision."""
-    n = max(_revisions(stem) or [0]) + 1
-    while True:
-        p = "%s.r%02d.FCStd" % (stem, n)
-        try:
-            os.close(os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-            return p
-        except FileExistsError:
-            n += 1
 
 
 def op_run_script(args):
@@ -1355,7 +1312,7 @@ def op_run_script(args):
         if not docpath:
             raise UserError("save='revision' needs doc (or use save_as for a new document)")
         stem, own = _revision_base(docpath)
-        revs = _revisions(stem)
+        revs = {n: p for n, p in fileutil.revisions(*os.path.split(stem)) if n}
         if revs and max(revs) > own:
             newest = revs[max(revs)]
             if not args.get("from_older"):
@@ -1415,7 +1372,7 @@ def op_run_script(args):
             saved = args["save_as"]
             save_as(doc, saved)
         else:
-            saved = _reserve_revision(_revision_base(docpath)[0])
+            saved = fileutil.reserve_revision(*os.path.split(_revision_base(docpath)[0]))
             try:
                 save_as(doc, saved)
             except Exception:

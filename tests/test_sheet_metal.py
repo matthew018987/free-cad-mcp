@@ -24,7 +24,7 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from mcp_client import ROOT, Client, check, fails  # noqa: E402
+from mcp_client import ROOT, Client, check, fails, write  # noqa: E402
 
 RC = os.path.join(ROOT, "evals", "run_case.py")
 _spec = importlib.util.spec_from_file_location("run_case", RC)
@@ -68,12 +68,6 @@ def result(txt):
     """The fc.result(...) JSON block of a run_script reply."""
     m = re.search(r"^result\n((?:  .*\n?)+)", txt, re.M)
     return json.loads(m.group(1)) if m else {}
-
-
-def write(path, text):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as fh:
-        fh.write(text)
 
 
 def near(a, b, tol=1e-4):

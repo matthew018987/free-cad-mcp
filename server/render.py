@@ -36,7 +36,6 @@ VIEWS = {
     "iso-left":   (-45, 35.264),
     "iso-bottom": (45, -35.264),
 }
-ORTHO_LABELS = {"front", "back", "right", "left", "top", "bottom"}
 
 PALETTE = [
     (0.55, 0.68, 0.86), (0.92, 0.72, 0.38), (0.55, 0.80, 0.58), (0.86, 0.55, 0.55),

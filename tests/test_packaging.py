@@ -22,7 +22,6 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-import mcp_client  # noqa: E402
 from mcp_client import Client, check, fails  # noqa: E402
 
 DIST = os.path.join(ROOT, "dist", "freecad-design")
