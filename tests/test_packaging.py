@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """M4 tests: the plugin package, the MCP Reload helper and the eval harness.
 
-    python3 tests/test_m4.py
+    python3 tests/test_packaging.py
 
 Everything runs against a freshly built dist/freecad-design, started exactly as
 the plugin's .mcp.json starts it. FreeCAD GUI checks use private settings and a
@@ -129,7 +129,7 @@ class PluginClient(Client):
 tmp = os.path.realpath(tempfile.mkdtemp(prefix="fcmcp-m4-"))   # FreeCAD reports /private/var
 try:
     print("build")
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "build_plugin.py")], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "build_plugin.py")], capture_output=True, text=True)
     check("build_plugin.py builds and validates", r.returncode == 0 and "validation: ok" in r.stdout, r.stdout + r.stderr)
     zp = os.path.join(ROOT, "dist", "freecad-design.zip")
     with zipfile.ZipFile(zp) as z:
@@ -138,7 +138,7 @@ try:
           all(any(n == "freecad-design/" + x or n.startswith("freecad-design/" + x) for n in names)
               for x in (".claude-plugin/plugin.json", ".mcp.json", "skills/freecad-design/SKILL.md",
                         "skills/freecad-design/references/fclib.md", "server/launch.sh", "server/freecad_mcp.py",
-                        "freecad_addon/MCP_Reload.FCMacro", "freecad_addon/FreeCADMCPReload/InitGui.py",
+                        "freecad-addon/MCP_Reload.FCMacro", "freecad-addon/FreeCADMCPReload/InitGui.py",
                         "commands/release.md", "README.md", "LICENSE")), "")
     check("no top-level bin/ and no stray caches in the zip",
           not any(n.startswith("freecad-design/bin/") or "__pycache__" in n or n.endswith(".pyc") for n in names))
@@ -153,14 +153,14 @@ try:
     check("plugin eval suite: a prompt and graders per case", ev == sorted(c["id"] for c in CASES) and all(
         os.path.isfile(os.path.join(DIST, "evals", c, "prompt.md")) and os.listdir(os.path.join(DIST, "evals", c, "graders"))
         for c in ev), ev)
-    macro = open(os.path.join(ROOT, "freecad_addon", "MCP_Reload.FCMacro")).read()
+    macro = open(os.path.join(ROOT, "freecad-addon", "MCP_Reload.FCMacro")).read()
     try:
         compile(macro, "MCP_Reload.FCMacro", "exec")
         compiled = True
     except SyntaxError:
         compiled = False
     check("macro generated from mcp_reload.py and compiles", compiled and macro.rstrip().endswith("toggle()")
-          and open(os.path.join(ROOT, "freecad_addon", "FreeCADMCPReload", "mcp_reload.py")).read() in macro)
+          and open(os.path.join(ROOT, "freecad-addon", "FreeCADMCPReload", "mcp_reload.py")).read() in macro)
 
     print("plugin server (started as .mcp.json starts it)")
     home = os.path.join(tmp, "home")
@@ -205,7 +205,7 @@ try:
     os.makedirs(rl)
     shutil.copyfile(os.path.join(home, "plug", "build", "plug.FCStd"), os.path.join(rl, "base.FCStd"))
     res = gui(os.path.join(HERE, "gui", "reload_check.py"),
-              {"RELOAD_ADDON_DIR": os.path.join(DIST, "freecad_addon", "FreeCADMCPReload"), "RELOAD_WORKDIR": rl,
+              {"RELOAD_ADDON_DIR": os.path.join(DIST, "freecad-addon", "FreeCADMCPReload"), "RELOAD_WORKDIR": rl,
                "RELOAD_PY": os.path.join(RES, "bin", "python"), "RELOAD_LIB": os.path.join(RES, "lib"),
                "RELOAD_OUT": os.path.join(rl, "out.json"), "OUT": os.path.join(rl, "out.json")})
     check("an outside rebuild reloads the open document", res.get("reloaded") is True, res)

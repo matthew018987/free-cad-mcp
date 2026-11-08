@@ -2,7 +2,24 @@
   "name": "freecad-design",
   "displayName": "FreeCAD Design",
   "description": "Design mechanical parts in FreeCAD from a brief, datasheets and reference drawings; verify fits, clearances and alignment with numbers; make ISO drawings; and produce a verified package for 3D printing, CNC milling, turning or laser cutting.",
-  "author": {"name": "Matthew Nunn"},
+  "author": {
+    "name": "Matthew Nunn"
+  },
   "license": "Apache-2.0",
-  "keywords": ["freecad", "cad", "mechanical", "3d-printing", "cnc", "drawings"]
+  "keywords": [
+    "freecad",
+    "cad",
+    "mechanical",
+    "3d-printing",
+    "cnc",
+    "drawings"
+  ],
+  "mcpServers": {
+    "freecad": {
+      "command": "/bin/sh",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/server/launch.sh"
+      ]
+    }
+  }
 }

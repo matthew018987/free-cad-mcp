@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the installable artifacts from this repository (stdlib only):
 
-    python3 tools/build_plugin.py
+    python3 scripts/build_plugin.py
 
-  freecad_addon/MCP_Reload.FCMacro            generated from mcp_reload.py (single source)
+  freecad-addon/MCP_Reload.FCMacro            generated from mcp_reload.py (single source)
   skills/freecad-design/references/fclib.md   generated from server/fclib.py docstrings
   dist/freecad-design/                        the plugin folder (Claude Code: --plugin-dir)
   dist/freecad-design.zip                     the same, for Cowork / claude.ai "Upload plugin"
@@ -35,7 +35,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
 PLUGIN = os.path.join(DIST, "freecad-design")
 SERVER_FILES = ["freecad_mcp.py", "worker.py", "fclib.py", "analysis.py", "render.py", "standards.py",
-                "manufacture.py", "drawing_worker.py", "drawing_support.py", "fea.py", "launch.sh"]
+                "manufacture.py", "drawing_worker.py", "drawing_support.py", "fea.py", "launch.sh", "server_instructions.md"]
 
 
 def read(p):
@@ -52,11 +52,11 @@ def write(p, text):
 # ------------------------------------------------------------- generation
 
 def make_macro():
-    src = read("freecad_addon/FreeCADMCPReload/mcp_reload.py")
-    macro = ("# MCP_Reload.FCMacro — generated from freecad_addon/FreeCADMCPReload/mcp_reload.py; do not edit.\n"
+    src = read("freecad-addon/FreeCADMCPReload/mcp_reload.py")
+    macro = ("# MCP_Reload.FCMacro — generated from freecad-addon/FreeCADMCPReload/mcp_reload.py; do not edit.\n"
              "# Run it to toggle the watcher: open documents reload when the FreeCAD MCP server rebuilds them.\n\n"
              + src + "\n\n# --- macro entry point\ntoggle()\n")
-    write(os.path.join(ROOT, "freecad_addon", "MCP_Reload.FCMacro"), macro)
+    write(os.path.join(ROOT, "freecad-addon", "MCP_Reload.FCMacro"), macro)
 
 
 def _sig(node):
@@ -535,23 +535,24 @@ def _assemble():
     if os.path.isdir(PLUGIN):
         shutil.rmtree(PLUGIN)
     os.makedirs(os.path.join(PLUGIN, ".claude-plugin"))
-    manifest = json.loads(read("plugin/plugin.json"))
-    manifest.pop("version", None)                         # plugin/plugin.json carries no version: SERVER_VERSION
+    manifest = json.loads(read(".claude-plugin/plugin.json"))
+    manifest.pop("version", None)                         # the repo's plugin.json carries no version: SERVER_VERSION
+    # the repo declares its server inline (a root .mcp.json would also be read as this repo's project config);
+    # the packaged plugin keeps it in .mcp.json
+    servers = manifest.pop("mcpServers")
     manifest = dict(list(manifest.items())[:2] + [("version", server_version())] + list(manifest.items())[2:])
     write(os.path.join(PLUGIN, ".claude-plugin", "plugin.json"), json.dumps(manifest, indent=2) + "\n")
-    shutil.copyfile(os.path.join(ROOT, "plugin", "mcp.json"), os.path.join(PLUGIN, ".mcp.json"))
-    shutil.copytree(os.path.join(ROOT, "plugin", "commands"), os.path.join(PLUGIN, "commands"))
-    shutil.copyfile(os.path.join(ROOT, "plugin", "README.md"), os.path.join(PLUGIN, "README.md"))
+    write(os.path.join(PLUGIN, ".mcp.json"), json.dumps({"mcpServers": servers}, indent=2) + "\n")
+    shutil.copytree(os.path.join(ROOT, "commands"), os.path.join(PLUGIN, "commands"))
+    shutil.copyfile(os.path.join(ROOT, "docs", "plugin-readme.md"), os.path.join(PLUGIN, "README.md"))
     shutil.copyfile(os.path.join(ROOT, "LICENSE"), os.path.join(PLUGIN, "LICENSE"))
     shutil.copytree(os.path.join(ROOT, "skills"), os.path.join(PLUGIN, "skills"),
                     ignore=shutil.ignore_patterns(".*"))
     os.makedirs(os.path.join(PLUGIN, "server"))
     for f in SERVER_FILES:
         shutil.copyfile(os.path.join(ROOT, "server", f), os.path.join(PLUGIN, "server", f))
-    shutil.copyfile(os.path.join(ROOT, "prompt", "server_instructions.md"),
-                    os.path.join(PLUGIN, "server", "server_instructions.md"))
     os.chmod(os.path.join(PLUGIN, "server", "launch.sh"), 0o755)
-    shutil.copytree(os.path.join(ROOT, "freecad_addon"), os.path.join(PLUGIN, "freecad_addon"),
+    shutil.copytree(os.path.join(ROOT, "freecad-addon"), os.path.join(PLUGIN, "freecad-addon"),
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".*"))
     # eval harness (fixtures + runner) and the claude plugin eval suite
     h = os.path.join(PLUGIN, "evals_harness")
@@ -608,7 +609,7 @@ def make_mcpb(manifest):
     }
     with zipfile.ZipFile(mp, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("manifest.json", json.dumps(mf, indent=2))
-        for sub in ("server", "freecad_addon", "skills"):
+        for sub in ("server", "freecad-addon", "skills"):
             for root, dirs, files in os.walk(os.path.join(PLUGIN, sub)):
                 for f in sorted(files):
                     full = os.path.join(root, f)
@@ -625,9 +626,9 @@ def validate(zp, mp=None):
     problems = []
     m = json.load(open(os.path.join(PLUGIN, ".claude-plugin", "plugin.json")))
     ver = server_version()
-    src = json.loads(read("plugin/plugin.json"))
+    src = json.loads(read(".claude-plugin/plugin.json"))
     if "version" in src and src["version"] != ver:
-        problems.append("plugin/plugin.json version %s disagrees with SERVER_VERSION %s in server/freecad_mcp.py — "
+        problems.append(".claude-plugin/plugin.json version %s disagrees with SERVER_VERSION %s in server/freecad_mcp.py — "
                         "drop it from plugin.json (the build stamps SERVER_VERSION)" % (src["version"], ver))
     if m.get("version") != ver:
         problems.append("built plugin.json version %r is not SERVER_VERSION %s" % (m.get("version"), ver))

@@ -29,7 +29,7 @@ with Claude's rebuilds.
 Status: M1 (core loop), M2 (verification), M2b (Assembly workbench), M3
 (drawings, export, manufacturability, release) and M4 (Cowork / Claude Code
 plugin, reload helper, evals) built, evaluated end to end and hardened, and M5
-(FEA with CalculiX) built — see [DESIGN.md](DESIGN.md) §11.
+(FEA with CalculiX) built — see [docs/design.md](docs/design.md) §11.
 
 ## Requirements
 
@@ -39,10 +39,23 @@ plugin, reload helper, evals) built, evaluated end to end and hardened, and M5
 
 ## Install
 
-**As a plugin (Cowork or Claude Code).** Build it, then install the zip:
+**From GitHub (Claude Code).** The repository is itself a plugin and a
+one-plugin marketplace:
+
+```
+/plugin marketplace add matthew018987/free-cad-mcp
+```
+
+```
+/plugin install freecad-design@freecad-mcp
+```
+
+To try a local checkout instead, run `claude --plugin-dir .` in it.
+
+**As a plugin zip (Cowork or Claude Code).** Build it, then install the zip:
 
 ```bash
-python3 tools/build_plugin.py
+python3 scripts/build_plugin.py
 ```
 
 This writes `dist/freecad-design.zip` (the plugin: MCP server, the
@@ -155,61 +168,67 @@ open document(s)" when it starts; run the macro to switch it off or on.
 ## Layout
 
 ```
-server/freecad_mcp.py   MCP server (stdlib only)
-server/worker.py        runs one request inside FreeCAD
-server/fclib.py         `fc` helper library for model scripts
-server/render.py        headless renderer
-server/analysis.py      measure, check_fit, section, checks, GUI-edit diffs (inside FreeCAD)
-server/standards.py     ISO tables: holes, threads, fasteners, fits
-server/manufacture.py   verified exports, DFM checks, release package (inside FreeCAD)
-server/drawing_worker.py  TechDraw drawings — runs in the FreeCAD GUI process
-server/drawing_support.py shared drawing geometry helpers
-server/fea.py           FEA load cases: gmsh mesh, CalculiX solve, results (inside FreeCAD)
-skills/freecad-design/  the playbook skill (SKILL.md) and its reference pages
-prompt/                 server instructions, project-instructions template
-plugin/                 plugin manifest, .mcp.json, commands, plugin README
-freecad_addon/          MCP Reload addon and macro
-tools/build_plugin.py   builds and validates dist/ (plugin zip, .mcpb)
-evals/                  eval cases, fixtures, mcp_cli.py and run_case.py
-examples/nema17_bracket worked example
-tests/smoke_test.py     M1 end-to-end tests over stdio with real FreeCAD
-tests/test_m2.py        M2 verification tests against tests/fixtures/fitlab
-tests/test_m3.py        assemblies, export, drawings, DFM, release
-tests/test_m4.py        plugin build, packaged server, reload helper, eval harness
-tests/test_analysis.py  hole detection, measure semantics, check types
-tests/test_drawings.py  drawing read/edit/ops, paper and scale, sheet status
-tests/test_manufacture.py  release docs, oriented exports, DFM wording, standards
-tests/test_worker_fclib.py hole compensation, ref-part roles, revisions, build lock
-tests/test_server.py    argument validation, guide, setup hints, release flows
-tests/test_reload_addon.py MCP Reload in real FreeCAD GUIs
-tests/test_evals_plugin.py generated plugin eval suite, graders, new cases
-tests/test_m5.py        FEA against theory (beam deflection and stress, natural frequency,
-                        Euler buckling, bonded vs solid), equilibrium, load cases, stale checks
-tests/test_sheet_metal.py bent sheet metal: folding, flat pattern, DFM, flat DXF, eval case
-examples/turned_shaft   lathe part: fits, thread, cross hole → drawing + release
-DESIGN.md               design, spike results, roadmap
+.claude-plugin/          plugin.json (with the MCP server) and marketplace.json
+commands/                the plugin's slash commands (/freecad-design:new-part, …)
+skills/freecad-design/   the playbook skill (SKILL.md) and its reference pages
+server/                  the MCP server and the FreeCAD workers
+  freecad_mcp.py         MCP server (stdlib only); launch.sh starts it with FreeCAD's Python
+  server_instructions.md sent to clients as the MCP `instructions`
+  worker.py              runs one request inside FreeCAD
+  fclib.py               `fc` helper library for model scripts
+  render.py              headless renderer
+  analysis.py            measure, check_fit, section, checks, GUI-edit diffs
+  standards.py           ISO tables: holes, threads, fasteners, fits
+  manufacture.py         verified exports, DFM checks, release package
+  drawing_worker.py      TechDraw drawings (runs in the FreeCAD GUI process)
+  drawing_support.py     shared drawing geometry helpers
+  fea.py                 FEA load cases: gmsh mesh, CalculiX solve, results
+freecad-addon/           MCP Reload addon and macro
+docs/
+  design.md              design, spike results, roadmap
+  plugin-readme.md       ships as the packaged plugin's README
+  project-instructions-template.md  for Cowork project instructions
+  images/, prototypes/   spike screenshots and the renderer prototype
+examples/                worked examples: nema17_bracket, turned_shaft
+evals/                   eval cases, fixtures, mcp_cli.py and run_case.py
+scripts/build_plugin.py  builds and validates dist/ (plugin zip, .mcpb, eval suite)
+tests/                   suites over real stdio with real FreeCAD
+  test_core_loop.py      the core loop end to end: build, report, render, inspect, files
+  test_verification.py   standards, measure, check_fit, section, checks.json (fixtures/fitlab)
+  test_assembly_release.py  assemblies, export, drawings, DFM, release (fixtures/asmlab)
+  test_packaging.py      plugin build, packaged server, reload helper, eval harness
+  test_fea.py            FEA against theory (deflection, stress, frequency, buckling),
+                         equilibrium, load cases, stale checks
+  test_analysis.py       hole detection, measure semantics, check types
+  test_drawings.py       drawing read/edit/ops, paper and scale, sheet status
+  test_manufacture.py    release docs, oriented exports, DFM wording, standards
+  test_worker_fclib.py   hole compensation, ref-part roles, revisions, build lock
+  test_server.py         argument validation, guide, setup hints, release flows
+  test_reload_addon.py   MCP Reload in real FreeCAD GUIs
+  test_evals_plugin.py   generated plugin eval suite, graders, new cases
+  test_sheet_metal.py    bent sheet metal: folding, flat pattern, DFM, flat DXF
 ```
 
 ## Tests
 
 ```bash
-python3 tests/smoke_test.py
+python3 tests/test_core_loop.py
 ```
 
 ```bash
-python3 tests/test_m2.py
+python3 tests/test_verification.py
 ```
 
 ```bash
-python3 tests/test_m3.py
+python3 tests/test_assembly_release.py
 ```
 
 ```bash
-python3 tests/test_m4.py
+python3 tests/test_packaging.py
 ```
 
 ```bash
-python3 tests/test_m5.py
+python3 tests/test_fea.py
 ```
 
 Then the hardening suites: `test_analysis.py`, `test_drawings.py`,
@@ -221,7 +240,7 @@ total. Drawings run FreeCAD in the background (on macOS nothing appears on
 screen); the reload and plugin suites open FreeCAD windows for a few seconds
 at a time.
 
-`test_m4.py` (49 checks) covers:
+`test_packaging.py` (49 checks) covers:
 - the plugin build: layout, manifest, `.mcp.json`, skill and commands, zip and
   `.mcpb`, and the generated `claude plugin eval` suite
 - the packaged server started exactly as `.mcp.json` says, its reference
@@ -272,7 +291,7 @@ claude plugin eval . --scaffold --allow-real-servers --allow-tools "mcp__plugin_
 Results land in `dist/freecad-design/evals/results/`, which rebuilds keep and
 the zip leaves out.
 
-`test_m3.py` (37 checks) covers:
+`test_assembly_release.py` (37 checks) covers:
 - assemblies: joints hold; a wrong joint mode is caught by the checks
 - verified exports, including DXF with true circles at the origin
 - drawings: every dimension verified, callouts, fits with limits, threads,
@@ -281,7 +300,7 @@ the zip leaves out.
 - release packages, and the three refusal gates (failing checks, not
   manufacturable, unported GUI edits)
 
-`test_m2.py` (56 checks) runs against a fixture whose answers are known in
+`test_verification.py` (56 checks) runs against a fixture whose answers are known in
 advance:
 - a 500 mm³ overlap, a 2.0 mm gap
 - a shaft with a 0.1 mm radial gap in its bore
@@ -292,7 +311,7 @@ advance:
 - detecting, adopting and refusing GUI edits
 - the NEMA17 example's acceptance checks
 
-`smoke_test.py` (50 checks) covers:
+`test_core_loop.py` (50 checks) covers:
 - the protocol and every tool
 - build reports, including a failed fillet and a script error
 - change tracking, and the overwrite guard

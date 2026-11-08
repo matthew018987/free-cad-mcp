@@ -12,7 +12,7 @@ examples/*/drawings/
 examples/*/release/
 *.FCStd1
 
-# built by tools/build_plugin.py (plugin zip, .mcpb, eval results)
+# built by scripts/build_plugin.py (plugin zip, .mcpb, eval results)
 dist/
 
 # macOS

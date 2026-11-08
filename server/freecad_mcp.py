@@ -663,7 +663,7 @@ def t_freecad_status(args):
     return json.dumps(out, indent=2)
 
 
-ADDON_SRC = os.path.join(HERE, "..", "freecad_addon")
+ADDON_SRC = os.path.join(HERE, "..", "freecad-addon")
 _fc_dirs_cache = {}
 
 
@@ -709,8 +709,7 @@ def install_reload_helper():
 
 def playbook_path():
     for p in (os.path.join(HERE, "playbook.md"),
-              os.path.join(HERE, "..", "skills", "freecad-design", "SKILL.md"),
-              os.path.join(HERE, "..", "prompt", "SKILL.md")):
+              os.path.join(HERE, "..", "skills", "freecad-design", "SKILL.md")):
         if os.path.isfile(p):
             return os.path.abspath(p)
     return None
@@ -2835,12 +2834,10 @@ TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
 # ----------------------------------------------------------------- protocol
 
 def server_instructions():
-    p = os.path.join(HERE, "..", "prompt", "server_instructions.md")
-    alt = os.path.join(HERE, "server_instructions.md")
-    for cand in (alt, p):
-        if os.path.isfile(cand):
-            with open(cand) as fh:
-                return re.sub(r"<!--.*?-->\n?", "", fh.read(), flags=re.S).strip()
+    p = os.path.join(HERE, "server_instructions.md")
+    if os.path.isfile(p):
+        with open(p) as fh:
+            return re.sub(r"<!--.*?-->\n?", "", fh.read(), flags=re.S).strip()
     return ("FreeCAD design server. Units mm; Z up. Call guide once at the start of a design task. "
             "Write model.py, build, and read the whole build report; never claim fit from an image.")
 

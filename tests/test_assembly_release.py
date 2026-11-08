@@ -4,7 +4,7 @@
 over real stdio with real FreeCAD (the drawing tests run the FreeCAD GUI
 in the background for a few seconds each).
 
-    python3 tests/test_m3.py
+    python3 tests/test_assembly_release.py
 """
 import json
 import os

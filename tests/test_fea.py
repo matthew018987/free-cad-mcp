@@ -7,7 +7,7 @@ plus equilibrium, convergence (and when the refined solve is skipped), load case
 fea.json, fea_* checks going stale when the model changes, and release re-solving
 stale cases.
 
-    python3 tests/test_m5.py
+    python3 tests/test_fea.py
 """
 import json
 import math

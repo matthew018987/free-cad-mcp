@@ -11,7 +11,7 @@ Design mechanical parts with Claude and FreeCAD, then send them off for manufact
 ## Use it
 
 - **Cowork:** Customize ▸ Plugins ▸ Add ▸ Upload plugin, then choose `freecad-design.zip`. Start a task and run `/freecad-design:new-part`, or just describe the part.
-- **Claude Code:** `claude --plugin-dir <this folder>`.
+- **Claude Code:** `/plugin marketplace add matthew018987/free-cad-mcp`, then `/plugin install freecad-design@freecad-mcp`; or `claude --plugin-dir <this folder>`.
 - **First run:** ask Claude to run `freecad_status`. It should report `host.platform: darwin` and FreeCAD found.
 
 Commands:
