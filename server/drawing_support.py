@@ -90,7 +90,8 @@ def _vertical(f, d):
 def _edge_extreme(e, w):
     """The point of edge e furthest along w (exact for lines and arcs)."""
     import Part
-    k = e.Curve.__class__.__name__
+    import fclib as fc
+    k = fc._curve_kind(e)
     pts = [v.Point for v in e.Vertexes]
     if k == "Circle":
         c, a, r = e.Curve.Center, e.Curve.Axis, e.Curve.Radius
@@ -150,6 +151,7 @@ def detect_pockets(shape, d, holes=None):
                 from two views has the same faces."""
     import Part
     import analysis as an
+    import fclib as fc
     from FreeCAD import Vector
     d = Vector(d)
     d.normalize()
@@ -228,7 +230,7 @@ def detect_pockets(shape, d, holes=None):
             if key in seen:
                 continue
             seen.add(key)
-            arcs = [e for e in f.Edges if e.Curve.__class__.__name__ == "Circle"]
+            arcs = [e for e in f.Edges if fc._curve_kind(e) == "Circle"]
             arc = max(arcs, key=lambda e: _span(e, d)[1]) if arcs else None      # the one at the rim
             ei = next((k for k, e2 in enumerate(shape.Edges) if arc is not None and e2.isSame(arc)), None)
             corners.append({"r": round(s.Radius, 4), "edge": ei, "center": arc.Curve.Center if arc else None})

@@ -337,6 +337,22 @@ def face(obj, direction, at=None, contains=None, tol=1e-6):
     return FaceRef(feat, "Face%d" % (i + 1), f)
 
 
+def _curve(e):
+    """e.Curve, or None for an edge without a curve: a degenerated edge, e.g. a
+    sphere's pole (a domed boss, or the corner patch where three fillets meet)
+    or a cone's apex, where reading Curve raises TypeError."""
+    try:
+        return None if getattr(e, "Degenerated", False) else e.Curve
+    except Exception:  # noqa: BLE001 — "undefined curve type"
+        return None
+
+
+def _curve_kind(e):
+    """The edge's curve class name ('Line', 'Circle', 'BSplineCurve' …); '' for an edge without one."""
+    c = _curve(e)
+    return c.__class__.__name__ if c is not None else ""
+
+
 def edges(obj, kind=None, parallel=None, on=None, r=None, at=None, axis="Z", tol=1e-6):
     """Edges of obj, filtered (all filters combine):
       kind      'line' | 'circle'
@@ -355,7 +371,7 @@ def edges(obj, kind=None, parallel=None, on=None, r=None, at=None, axis="Z", tol
     at_dir = _dir(axis) if at is not None else None
     names = []
     for i, e in enumerate(s.Edges):
-        cname = e.Curve.__class__.__name__
+        cname = _curve_kind(e)
         if kind == "line" and cname not in ("Line", "LineSegment"):
             continue
         if kind == "circle" and cname != "Circle":

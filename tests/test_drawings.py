@@ -54,6 +54,17 @@ def dims_of(txt):
     return re.findall(r"dim\s+(\S+)\s+(\S+)\s+(.+?)\s+at \((-?[\d.]+), (-?[\d.]+)\)\s+refs (\S+)", txt)
 
 
+# a plate with a domed boss: the sphere's poles are degenerated edges, whose Curve raises TypeError
+DOME = """b = fc.body("Knob")
+fc.pad(b, fc.sketch(b, "XY", fc.rect(40, 30)), 6, name="Plate")
+dome = b.newObject("PartDesign::AdditiveSphere", "Dome")
+dome.Radius = 8
+dome.Placement.Base = App.Vector(0, 0, 6)
+doc.recompute()
+fc.holes(b, on=fc.face(b, "+Z", at=6), at=[(-14, -9), (14, -9), (-14, 9), (14, 9)], spec="M3 clearance normal",
+         name="Screws")
+"""
+
 PLATE = """P = fc.params()
 plate = fc.body("Plate")
 fc.pad(plate, fc.sketch(plate, "XY", fc.rect(P.width, P.depth), name="PlateSketch"), P.thickness, name="Base")
@@ -342,13 +353,14 @@ try:
     project("seat", SEAT, turning, {})
     project("sleeve", SLEEVE, turning, {})
     project("bent", BENT, {"process": "sheet", "material": {"name": "5052-H32 aluminium"}}, {})
+    project("dome", DOME, {"process": "cnc", "material": {"name": "6061-T6"}}, {})
     if HAS_SHEET_METAL:
         project("ubracket", UBRACKET, {"process": "sheet", "material": {"name": "5052-H32 aluminium"}}, {"k": 0.33})
     c = Client(tmp)
     c.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
     for p in ("plate4", "gusset", "spacer", "printed", "shaft", "flange", "centre", "mover", "taps", "pin", "rail",
               "disc", "conveyor-v2", "pair", "pockets", "tray", "slots", "chamfered", "window", "under", "bush", "seat",
-              "sleeve", "bent") + (("ubracket", ) if HAS_SHEET_METAL else ()):
+              "sleeve", "bent", "dome") + (("ubracket", ) if HAS_SHEET_METAL else ()):
         err, txt, _ = c.tool("build", {"project": p, "views": []})
         check("%s builds" % p, not err and "BUILD ✓" in txt, txt[:600])
 
@@ -940,6 +952,12 @@ try:
               and "shape" not in sh.get("changed", []), sh)
     else:
         print("  (fc.sheet_metal not in this fclib yet — flat pattern view checks skipped)")
+
+    print("edges without a curve: a domed boss's sphere poles (also where three fillets meet)")
+    err, txt, _ = c.tool("drawing", {"project": "dome", "part": "Knob", "return_image": False})
+    check("a part with degenerated edges is drawn: hole callouts and every dimension verified (it raised "
+          "'TypeError: undefined curve type')", not err and "4× ⌀3.4 THRU" in txt
+          and re.search(r"dims\s+(\d+)/\1 verified", txt), txt)
     c.close()
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
