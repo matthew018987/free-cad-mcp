@@ -447,7 +447,7 @@ class Entity:
             s = self.shape.Surface
             return _axis_point(s), _canon(s.Axis), 2 * s.Radius
         if self.kind == "edge":
-            c = self.shape.Curve.__class__.__name__
+            c = fc._curve_kind(self.shape)
             if c in ("Line", "LineSegment"):
                 p0, p1 = self.shape.Vertexes[0].Point, self.shape.Vertexes[-1].Point
                 d = p1 - p0
@@ -1658,7 +1658,7 @@ def section_faces(shape, p, n):
 def _edge_uv(e, p, u, v):
     """A section edge in plane coordinates: 'line (u0, v0)–(u1, v1)', 'arc Ø3.600 centre (u, v)'."""
     try:
-        c = e.Curve.__class__.__name__
+        c = fc._curve_kind(e)
         if c in ("Line", "LineSegment"):
             (u0, v0), (u1, v1) = _uv(e.Vertexes[0].Point, p, u, v), _uv(e.Vertexes[-1].Point, p, u, v)
             return "line (%s, %s)–(%s, %s)" % (fmt(u0), fmt(v0), fmt(u1), fmt(v1))
@@ -1674,8 +1674,8 @@ def _edge_uv(e, p, u, v):
 
 def _parallel_lines(ea, eb):
     try:
-        if ea.Curve.__class__.__name__ not in ("Line", "LineSegment") or \
-                eb.Curve.__class__.__name__ not in ("Line", "LineSegment"):
+        if fc._curve_kind(ea) not in ("Line", "LineSegment") or \
+                fc._curve_kind(eb) not in ("Line", "LineSegment"):
             return False
         da = ea.Vertexes[-1].Point - ea.Vertexes[0].Point
         db = eb.Vertexes[-1].Point - eb.Vertexes[0].Point
@@ -1709,7 +1709,7 @@ def _contact_lines(fa, fb, n):
     other, as [(point, in-plane normal of the line)] (n: the plane normal)."""
     out = []
     for ea in fa.Edges:
-        if ea.Curve.__class__.__name__ not in ("Line", "LineSegment") or len(ea.Vertexes) != 2:
+        if fc._curve_kind(ea) not in ("Line", "LineSegment") or len(ea.Vertexes) != 2:
             continue
         p0 = ea.Vertexes[0].Point
         da = ea.Vertexes[-1].Point - p0
@@ -1717,7 +1717,7 @@ def _contact_lines(fa, fb, n):
             continue
         da.normalize()
         for eb in fb.Edges:
-            if eb.Curve.__class__.__name__ not in ("Line", "LineSegment") or len(eb.Vertexes) != 2 or \
+            if fc._curve_kind(eb) not in ("Line", "LineSegment") or len(eb.Vertexes) != 2 or \
                     _bbox_gap(ea.BoundBox, eb.BoundBox) > 1e-6:
                 continue
             q0, q1 = eb.Vertexes[0].Point, eb.Vertexes[-1].Point
@@ -1747,7 +1747,7 @@ def _axis_lines(f, q, a, w, t0, t1, reach):
     out = []
     for e in f.Edges:
         try:
-            if e.Curve.__class__.__name__ not in ("Line", "LineSegment") or len(e.Vertexes) != 2:
+            if fc._curve_kind(e) not in ("Line", "LineSegment") or len(e.Vertexes) != 2:
                 continue
             p0, p1 = e.Vertexes[0].Point, e.Vertexes[1].Point
         except Exception:  # noqa: BLE001

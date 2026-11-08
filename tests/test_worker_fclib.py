@@ -96,6 +96,18 @@ fc.holes(b, top, [(30, -10)], "Ø2.5", compensation=0.3, name="Forced")
 print(f"bore Ø{P.bore:g} / {P.bore:.2f} / {P.bore}")
 '''
 
+# a plate with a domed boss: the sphere's poles are degenerated edges, whose Curve raises TypeError
+DOME = '''b = fc.body("Knob")
+fc.pad(b, fc.sketch(b, "XY", fc.rect(40, 30)), 6, name="Plate")
+dome = b.newObject("PartDesign::AdditiveSphere", "Dome")
+dome.Radius = 8
+dome.Placement.Base = App.Vector(0, 0, 6)
+doc.recompute()
+fc.holes(b, on=fc.face(b, "+Z", at=6), at=[(-14, -9), (14, -9), (-14, 9), (14, 9)], spec="M3 clearance normal",
+         name="Screws")
+fc.result(circles=len(fc.edges(b, kind="circle")))
+'''
+
 HOLE_PROBE = '''for o in doc.Objects:          # as the GUI would: everything recomputed after opening
     o.touch()
 doc.recompute()
@@ -766,6 +778,16 @@ fc.mate(m, "f", fc.face(b, "+Z"), mode="against", rotate=33)
     check("…an older absolute key is still recognised by its sha1, and replaced by the relative key",
           "still r0001" in txt and "outside the build loop" not in txt and list(lb) == ["build/movable.FCStd"],
           (txt, lb))
+
+    print("edges without a curve: a sphere's poles (a domed boss, or three fillets meeting) are degenerated")
+    project("dome", DOME, {"process": "cnc"})
+    err, txt, _ = c.tool("build", {"project": "dome", "views": []})
+    check("fc.edges skips degenerated edges (it raised 'TypeError: undefined curve type')", not err
+          and "BUILD ✓" in txt and "circles=12" in txt and "TypeError" not in txt, txt)
+    err, txt, _ = c.tool("inspect", {"project": "dome", "object": "Knob", "level": "object"})
+    check("inspect level=object counts them as degenerate edges", not err and "degenerate 2" in txt, txt[-600:])
+    err, txt, _ = c.tool("check_manufacturing", {"project": "dome"})
+    check("cnc DFM (concave edges) runs on such a part", not err and "Knob — cnc" in txt, txt[-600:])
 
     c.close()
 finally:

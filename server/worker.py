@@ -1765,7 +1765,7 @@ def op_inspect(args):
             lines.append("  ... %d more (raise max_faces)" % (nf - limit))
         kinds = {}
         for e in s.Edges:
-            k = e.Curve.__class__.__name__
+            k = fc._curve_kind(e) or "degenerate"
             kinds[k] = kinds.get(k, 0) + 1
         lines.append("edges    %d  (%s)" % (len(s.Edges), ", ".join("%s %d" % kv for kv in sorted(kinds.items()))))
     elif level == "sketch":

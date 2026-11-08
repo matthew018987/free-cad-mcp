@@ -1592,7 +1592,7 @@ def outline_circle(shape, d):
         return None
     c0 = bb.Center
     for i, e in enumerate(shape.Edges):
-        cv = e.Curve
+        cv = fc._curve(e)
         if cv.__class__.__name__ != "Circle" or abs(abs(cv.Axis.dot(d)) - 1) > 1e-6 or \
                 abs(2 * cv.Radius - across[0]) > 1e-3:
             continue
@@ -1718,7 +1718,7 @@ def _chamfer_where(f):
             e = base.Shape.getElement((re.findall(r"Edge\d+", str(sub)) or [str(sub)])[-1])
         except Exception:  # noqa: BLE001
             continue
-        if e.Curve.__class__.__name__ == "Circle":
+        if fc._curve_kind(e) == "Circle":
             circles.append(round(2 * e.Curve.Radius, 3))
         else:
             lines += 1
@@ -1751,7 +1751,7 @@ def chamfer_size(part, shape, axis=None):
             if s.__class__.__name__ == "Cone" and abs(abs(math.degrees(s.SemiAngle)) - 45) < 0.5 \
                     and abs(abs(s.Axis.dot(axis)) - 1) < 1e-6:
                 t = [v.Point.dot(axis) for v in f.Vertexes]
-                rs = [e.Curve.Radius for e in f.Edges if e.Curve.__class__.__name__ == "Circle"]
+                rs = [e.Curve.Radius for e in f.Edges if fc._curve_kind(e) == "Circle"]
                 if t and max(t) - min(t) < 5:
                     sizes.append(("%s × 45°" % _w(max(t) - min(t)), ["⌀%s" % _w(2 * max(rs))] if rs else []))
     if not sizes:
@@ -1788,7 +1788,7 @@ def _hole_edges(shape, h):
     mine = []
     for n in names:
         try:
-            mine += [e for e in shape.Faces[int(n[4:]) - 1].Edges if e.Curve.__class__.__name__ == "Circle"]
+            mine += [e for e in shape.Faces[int(n[4:]) - 1].Edges if fc._curve_kind(e) == "Circle"]
         except (IndexError, ValueError):
             return None
     return set(i for i, e in enumerate(shape.Edges) if any(e.isSame(m) for m in mine))
@@ -1811,7 +1811,7 @@ def _circle_edge(shape, h, outer=True, keep=None):
     idx, best = None, None
     own = _hole_edges(shape, h)
     for i, e in enumerate(shape.Edges):
-        if e.Curve.__class__.__name__ != "Circle" or (own is not None and i not in own):
+        if fc._curve_kind(e) != "Circle" or (own is not None and i not in own):
             continue
         c = e.Curve.Center
         if keep is not None and (c - keep[0]).dot(keep[1]) > 1e-6:
@@ -2998,7 +2998,7 @@ def _circle_dim(doc, page, views, view, op, typ, ref, box, callout, tol=None, xy
         if views[m.group(1).lower()] is not view or m.group(2) != "Edge":
             raise DrawingError("%s: use a circular edge of the %s view (e.g. %s.Edge5)" % (ref, view.Label, view.Label))
         e = view.getEdgeByIndex(int(m.group(3)))
-        if e is None or e.Curve.__class__.__name__ != "Circle":
+        if e is None or fc._curve_kind(e) != "Circle":
             raise DrawingError("%s is not a circle or arc" % ref)
         radius, refs2d = e.Curve.Radius, ["Edge%s" % m.group(3)]
     else:
@@ -3019,7 +3019,7 @@ def _circle_dim(doc, page, views, view, op, typ, ref, box, callout, tol=None, xy
                 first = hole_callout(h, hole_spec_for(h, specs))
                 same = [x for x in ent.holes if hole_callout(x, hole_spec_for(x, specs)) == first]
                 text = callout_text(same, specs)[0]
-        elif ent.kind == "edge" and ent.shape.Curve.__class__.__name__ == "Circle":
+        elif ent.kind == "edge" and fc._curve_kind(ent.shape) == "Circle":
             if abs(abs(ent.shape.Curve.Axis.dot(vdir)) - 1) > 1e-6:
                 raise DrawingError("%s is not seen as a circle in the %s view" % (ref, view.Label))
             n = re.search(r"Edge(\d+)$", ref)

@@ -206,7 +206,8 @@ def _uv(p, origin, u, v):
 
 
 def _edge2d(e, origin, u, v):
-    c = e.Curve.__class__.__name__
+    import fclib
+    c = fclib._curve_kind(e)
     if c in ("Line", "LineSegment"):
         return ("line", _uv(e.Vertexes[0].Point, origin, u, v), _uv(e.Vertexes[-1].Point, origin, u, v))
     if c == "Circle":
@@ -716,9 +717,10 @@ def concave_edges(shape):
     """Straight concave edges between two planar faces — internal corners a
     rotating cutter cannot make sharp when it runs along them. Concave means
     face 1, followed away from the edge, runs into the side face 2 faces."""
+    import fclib
     out = []
     for e in shape.Edges:
-        if e.Curve.__class__.__name__ not in ("Line", "LineSegment"):
+        if fclib._curve_kind(e) not in ("Line", "LineSegment"):
             continue
         faces = shape.ancestorsOfType(e, Part.Face)
         if len(faces) != 2 or any(f.Surface.__class__.__name__ != "Plane" for f in faces):
