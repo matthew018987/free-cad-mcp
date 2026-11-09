@@ -1,0 +1,160 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Template: server/viewer.py fills in the build's data and one script (three.js r160, MIT, + viewer.js)
+     and writes the result to build/viewer/<name>.html after every build. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeCAD Live View</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1l6 3.5v7L8 15l-6-3.5v-7z' fill='%232f6fde'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6eb;
+    --accent: #2f6fde; --accent-soft: #e6eefc; --ok: #1f8f4e; --bad: #c9372c; --warn: #b7791f;
+    --canvas: #eef1f5; --chip: #f0f2f5;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15181d; --panel: #1d2128; --text: #e6e9ef; --muted: #9aa3b2; --line: #2c323c;
+      --accent: #6aa0ff; --accent-soft: #23314a; --ok: #4cc27e; --bad: #ff6b5e; --warn: #e0b04c;
+      --canvas: #1a1e24; --chip: #262b33;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15181d; --panel: #1d2128; --text: #e6e9ef; --muted: #9aa3b2; --line: #2c323c;
+    --accent: #6aa0ff; --accent-soft: #23314a; --ok: #4cc27e; --bad: #ff6b5e; --warn: #e0b04c;
+    --canvas: #1a1e24; --chip: #262b33;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  #app { display: flex; height: 100%; }
+  #side { width: 300px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
+    overflow-y: auto; display: flex; flex-direction: column; }
+  #stage { position: relative; flex: 1; min-width: 0; }
+  #c { display: block; width: 100%; height: 100%; touch-action: none; }
+  header { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+  .titlerow { display: flex; align-items: center; gap: 8px; }
+  h1 { font-size: 15px; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .live { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .live.on .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+  button, input[type=range] { font: inherit; color: inherit; }
+  #status { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--muted); }
+  .badge { padding: 1px 7px; border-radius: 10px; font-weight: 600; font-size: 12px; background: var(--chip); color: var(--text); }
+  .badge.ok { color: var(--ok); } .badge.bad { color: var(--bad); }
+  #banner { margin: 10px 14px 0; padding: 8px 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap;
+    background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); }
+  section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px;
+    display: flex; justify-content: space-between; align-items: center; }
+  h2 button { text-transform: none; letter-spacing: 0; }
+  .btn { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .btn.small { padding: 1px 6px; font-size: 11px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .part { display: flex; align-items: center; gap: 7px; padding: 3px 2px; border-radius: 5px; cursor: default; }
+  .part:hover { background: var(--chip); }
+  .part .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; border: 1px solid rgba(0,0,0,.15); }
+  .part .lb { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .part.off .lb { color: var(--muted); text-decoration: line-through; }
+  .tag { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .slider { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .slider input { flex: 1; accent-color: var(--accent); }
+  .slider output { width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+  label.chk { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+  .check { display: grid; grid-template-columns: 16px 1fr; gap: 2px 6px; padding: 2px 0; }
+  .check .mk.ok { color: var(--ok); } .check .mk.bad { color: var(--bad); }
+  .check .id { font-weight: 600; } .check .val { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .muted { color: var(--muted); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .params { margin-top: 6px; display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; font-variant-numeric: tabular-nums; }
+  #info { position: absolute; left: 12px; top: 12px; max-width: calc(100% - 24px); padding: 6px 10px; border-radius: 6px;
+    background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line);
+    font-variant-numeric: tabular-nums; pointer-events: none; }
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted);
+    font-size: 14px; pointer-events: none; text-align: center; padding: 20px; }
+  #hint { position: absolute; right: 12px; bottom: 10px; color: var(--muted); font-size: 11px; pointer-events: none; }
+  #toggleSide { position: absolute; right: 12px; top: 12px; display: none; }
+  [hidden] { display: none !important; }
+  @media (max-width: 720px) {
+    #app { flex-direction: column-reverse; }
+    #side { width: 100%; height: 45%; border-right: 0; border-top: 1px solid var(--line); }
+    #side.collapsed { display: none; }
+    #toggleSide { display: block; }
+    #hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header>
+      <div class="titlerow">
+        <h1 id="title">FreeCAD Live View</h1>
+        <span class="live" id="live"><span class="dot"></span><span id="liveText">connecting</span></span>
+      </div>
+      <div id="status"></div>
+    </header>
+    <div id="banner" hidden></div>
+    <section>
+      <h2>Parts <button class="btn small" id="showAll">Show all</button></h2>
+      <div id="parts" class="muted">—</div>
+    </section>
+    <section>
+      <h2>Section</h2>
+      <div class="row">
+        <button class="btn on" data-axis="">Off</button>
+        <button class="btn" data-axis="x">X</button>
+        <button class="btn" data-axis="y">Y</button>
+        <button class="btn" data-axis="z">Z</button>
+        <button class="btn" id="flip" title="Remove the other side">Flip</button>
+        <label class="chk"><input type="checkbox" id="caps" checked> Caps</label>
+      </div>
+      <div class="slider" id="sliderRow" hidden>
+        <input type="range" id="cut" min="0" max="1" step="0.01" value="0.5" aria-label="Section position">
+        <output id="cutVal">0</output>
+      </div>
+    </section>
+    <section>
+      <h2>View</h2>
+      <div class="row">
+        <button class="btn" data-view="iso">Iso</button>
+        <button class="btn" data-view="front">Front</button>
+        <button class="btn" data-view="top">Top</button>
+        <button class="btn" data-view="right">Right</button>
+        <button class="btn" data-view="left">Left</button>
+        <button class="btn" data-view="back">Back</button>
+        <button class="btn" data-view="bottom">Bottom</button>
+        <button class="btn" id="fit" title="F">Fit</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="chk"><input type="checkbox" id="ortho"> Orthographic</label>
+        <label class="chk"><input type="checkbox" id="edges" checked> Edges</label>
+      </div>
+    </section>
+    <section>
+      <h2>Checks <span id="checkCount" class="muted"></span></h2>
+      <div id="checks" class="muted">—</div>
+    </section>
+    <section>
+      <details id="paramsBox"><summary>Parameters</summary><div class="params" id="params"></div></details>
+    </section>
+  </aside>
+  <main id="stage">
+    <canvas id="c"></canvas>
+    <div id="info" hidden></div>
+    <div id="msg">Loading…</div>
+    <div id="hint">Drag to rotate · right-drag to pan · scroll to zoom · click a part to pick a point, shift-click a second to measure</div>
+    <button class="btn" id="toggleSide">Panel</button>
+  </main>
+</div>
+<!--fcmcp:data-->
+<!--fcmcp:script-->
+</body>
+</html>

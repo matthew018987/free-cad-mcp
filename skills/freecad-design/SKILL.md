@@ -47,9 +47,12 @@ decide based on that evidence, not on how a picture looks.
 - If process, material or a critical interface is unknown, ask now, in a short
   batch. Don't ask about things you can sensibly default; state the default
   instead.
-- Offer the live view once: `open_in_gui` opens the build in FreeCAD. With the
-  user's OK (it writes into their FreeCAD folder), `install_reload_helper=true`
-  makes FreeCAD reload documents whenever you rebuild them.
+- After the first build, offer the live 3D view once: `open_in_gui(viewer=true)`
+  opens `build/viewer/<name>.html` in the user's browser. It follows every
+  build, and they can rotate, section, hide parts and measure. To watch in FreeCAD instead,
+  `open_in_gui` opens the build there. With the user's OK (it writes into their
+  FreeCAD folder), `install_reload_helper=true` makes FreeCAD reload documents
+  whenever you rebuild them.
 
 ### ② Requirements
 - Write `requirements.md`. One line per requirement, each with a source tag:

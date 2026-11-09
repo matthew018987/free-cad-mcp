@@ -102,7 +102,7 @@ the design playbook (the `guide` tool serves the same text).
 | `export` | STEP/IGES, 3MF/STL/OBJ, BREP and DXF/SVG profiles, each verified |
 | `release` | Build, checks, manufacturability, exports, drawings, BOM and notes → zip; refuses to ship a failing design |
 | `job_status` | Collect background work |
-| `open_in_gui` | Open a file in the FreeCAD GUI; `install_reload_helper` (with your OK) installs MCP Reload |
+| `open_in_gui` | Open a file in the FreeCAD GUI; `install_reload_helper` (with your OK) installs MCP Reload; `viewer: true` opens the project's live 3D view in your browser instead |
 
 Inside `model.py`, `fc` (`server/fclib.py`) provides parameters bound to a
 spreadsheet, fully constrained sketch profiles, standard holes, reference
@@ -110,6 +110,31 @@ parts with named frames, mates, Assembly workbench joints and turned parts.
 Geometry references such as `Bracket.face(+Z)`, `Bracket.holes(d=3.4)[0]`,
 `Motor.frame(mount)` or `plane(z=8)` work in `measure`, `check_fit`, `section`
 and `checks.json`, in global coordinates.
+
+## Live 3D viewer
+
+Every build writes `build/viewer/<name>.html`: one file holding the viewer
+and the model, so it also opens in Cowork's file preview or as an email
+attachment. `open_in_gui(viewer=true)` opens it in your browser (the first
+build's reply names it). Keep it open for the whole design: after every build
+it reloads the model and keeps your camera where you left it.
+
+- Rotate (drag), pan (right-drag), zoom (scroll), view presets matching the
+  server's renders (Front looks toward +Y), orthographic or perspective.
+- Section along X, Y or Z with a slider; cut faces are capped.
+- Show, hide, isolate (double-click) or x-ray each part.
+- Click a part for a point's coordinates; shift-click a second point for the
+  distance and ΔX/ΔY/ΔZ.
+- Revision, build status, `checks.json` results and parameters in the side
+  panel. A failed build shows its error; if it made no geometry the last model
+  stays on screen.
+
+There is no web server. The page re-reads `scene.js` and `model.js` next to it
+once a second, so it follows the builds while it stays in the project's
+`build/viewer/` folder; a copy anywhere else shows the build it was written
+with (marked *snapshot*). The same folder holds `scene.glb` (FreeCAD's own
+glTF export, one node per part) and `scene.json`. three.js is bundled, so the
+page works offline.
 
 ## Live view in FreeCAD
 
@@ -119,6 +144,16 @@ document whenever Claude rebuilds it, keeping the camera. A document with
 unsaved edits of yours is never reloaded, and nothing reloads mid-edit. Run
 the `MCP_Reload` macro to switch it off or on.
 
+## Third-party code
+
+`server/viewer/vendor/three/` holds four files of [three.js](https://threejs.org)
+r160 (`three.module.min.js`, `GLTFLoader.js`, `BufferGeometryUtils.js`,
+`OrbitControls.js`), copied unmodified from the npm package with their MIT
+licence (`server/viewer/vendor/three/LICENSE`). `server/viewer.py` inlines them
+into each viewer page, with the licence text at the top of its script. To
+update them, replace the files with the same paths from a newer `three`
+package and change the version in that header.
+
 ## Configuration
 
 | Env var | Effect |
@@ -127,6 +162,7 @@ the `MCP_Reload` macro to switch it off or on.
 | `FREECAD_PYTHON` | Interpreter `launch.sh` starts the server with (default: FreeCAD's bundled Python) |
 | `FREECAD_MCP_HOME` | Projects directory (default `~/CAD`) |
 | `FREECAD_MCP_ROOTS` | `:`-separated allow-list of directories the server may touch |
+| `FREECAD_MCP_VIEWER` | `0` turns the live 3D viewer page and its scene export off |
 
 ## Layout
 
@@ -140,6 +176,9 @@ server/                  the MCP server and the FreeCAD workers
   fclib.py               `fc` helper library for model scripts
   analysis.py            measure, check_fit, section, checks
   render.py              headless renderer
+  scene.py               live viewer scene: glTF + scene.json per build
+  viewer.py              writes the self-contained viewer page (stdlib only)
+  viewer/                page template and viewer.js; vendor/three/ is three.js r160 (MIT)
   manufacture.py         exports, DFM checks, release package
   drawing_worker.py      TechDraw drawings (in the FreeCAD GUI process)
   fea.py                 FEA: gmsh mesh, CalculiX solve, results

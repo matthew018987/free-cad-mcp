@@ -67,6 +67,7 @@ DRAWING_WORKER = os.path.join(HERE, "drawing_worker.py")
 sys.path.insert(0, HERE)            # -I leaves the script directory off sys.path
 import fileutil  # noqa: E402
 import standards  # noqa: E402
+import viewer as vw  # noqa: E402
 TEXT_EXT = {".py", ".json", ".md", ".txt", ".csv", ".fcmacro", ".yaml", ".yml", ".tsv"}
 # binary reference files write_file accepts as base64 (vendor STEP, datasheet PDF, reference drawing …)
 BINARY_EXT = {".step", ".stp", ".iges", ".igs", ".stl", ".obj", ".3mf", ".pdf", ".png", ".jpg", ".jpeg",
@@ -1214,6 +1215,9 @@ def t_edit_file(args):
         _rel(bak, pdir or find_project_root(p)))
 
 
+_viewer_linked = set()          # projects whose build output already named the viewer page
+
+
 def _append_text(content, extra):
     """Add lines to a tool result (a string, or content blocks whose first block is text)."""
     if not extra:
@@ -1260,6 +1264,11 @@ def t_build(args, request_id=None):
         if hint:
             _reload_hinted.add(pdir)
             out = _append_text(out, hint)
+    page = vw.find_page(pdir) if vw.enabled() and data.get("rev") and not args.get("variant") else None
+    if page and pdir not in _viewer_linked:
+        _viewer_linked.add(pdir)
+        out = _append_text(out, "viewer   %s (live 3D view that follows every build; open_in_gui(viewer=true) "
+                                "opens it in the user's browser)" % _rel(page, pdir))
     return out
 
 
@@ -1336,6 +1345,19 @@ def t_job_status(args):
 
 
 def t_open_in_gui(args):
+    if args.get("viewer"):
+        if not args.get("project"):
+            raise ToolError("viewer=true needs project")
+        pdir = project_dir(args["project"])
+        page = vw.find_page(pdir)
+        if not page:
+            raise ToolError("the live 3D view is off (FREECAD_MCP_VIEWER=0)" if not vw.enabled() else
+                            "no viewer page yet: build the project first (each build writes build/viewer/<name>.html)")
+        import pathlib
+        import webbrowser
+        if webbrowser.open(pathlib.Path(page).as_uri()):
+            return "Opened the live 3D view in the user's browser: %s — it follows every build." % page
+        return "Could not open a browser from here; the user can open %s in any browser." % page
     fcinfo = require_freecad()
     note = ""
     was_running = bool(gui_pids())
@@ -2794,6 +2816,9 @@ TOOLS = [
                     "regenerated, never over unsaved edits. Relay the reply's note as written.",
      "inputSchema": _obj({"path": {"type": "string"}, "project": _PROJECT,
                           "install_reload_helper": {"type": "boolean"},
+                          "viewer": {"type": "boolean", "description": "Open the project's live 3D view "
+                                     "(build/viewer/<name>.html) in the user's browser instead; it follows every "
+                                     "build."},
                           "launch": {"type": "boolean", "description": "Default true; false only installs the helper."}})},
 ]
 TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
