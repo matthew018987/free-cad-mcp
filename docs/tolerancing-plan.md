@@ -1,6 +1,6 @@
 # Tolerancing: GD&T and tolerance stack-up (M6 plan)
 
-Status: **planned, decisions taken** (§10) · 2026-11-09 · branch `claude/inspiring-noether-r66663`, from `main` at `6aec6c5` · FreeCAD 1.1.4
+Status: **planned, decisions taken** (§10) · 2026-11-09 · branch `feature/tolerancing`, from `main` at `6aec6c5` · FreeCAD 1.1.4
 
 **Goal.** A CNC or turning shop can quote, make and inspect a part from the
 release zip alone: a datum reference frame, geometric tolerances on the
@@ -389,9 +389,9 @@ quoting systems price.
 
 ## 8. Phases
 
-All work goes on `claude/inspiring-noether-r66663` (from `main` at
-`6aec6c5`), one commit series per phase; `main` is untouched until the
-FreeCAD suites pass on the Mac.
+All work goes on `feature/tolerancing` (from `main` at `6aec6c5`), one
+commit series per phase; `main` is untouched until the FreeCAD suites pass
+on the Mac.
 
 | Phase | Scope | Runs on | Done when |
 |---|---|---|---|
