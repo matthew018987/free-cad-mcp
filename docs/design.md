@@ -550,6 +550,7 @@ workflow never depends on path mapping.
 | Finding | Handling |
 |---|---|
 | Views compute hidden lines asynchronously | poll `getVisibleEdges()` before dimensioning or exporting |
+| The view threads read settings, and FreeCAD's settings tree is not thread-safe: a group created on first use while another thread reads crashes FreeCAD (SIGSEGV/SIGBUS) | the worker creates every settings group a drawing op uses before any view computes |
 | View vertex/edge coordinates are **model** units; a dimension's X/Y is **paper** mm | positions = model × scale + paper offset |
 | Cosmetic vertex conventions (Y sign, units) differ between creation APIs | every hole-position dimension is created, measured, and kept only if it equals the model value |
 | Holes in curved faces have no circular edges | a verified cosmetic circle carries the callout |
