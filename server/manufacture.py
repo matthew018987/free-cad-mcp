@@ -1140,7 +1140,7 @@ def part_record(obj, process, project):
     for h in getattr(obj, "Group", []):
         if h.TypeId == "PartDesign::Hole":
             try:
-                n = len([g for g in h.Profile[0].Geometry if g.__class__.__name__ == "Circle"])
+                n = len(an.fc.hole_centres(h)) or 1         # pattern / mirror copies included
             except Exception:  # noqa: BLE001
                 n = 1
             hc = float(getattr(h, "FcHoleComp", 0.0) or 0.0)

@@ -83,14 +83,16 @@ def _sig(node):
 SECTIONS = [
     ("Parameters and context", ["params", "path", "doc", "result", "warn"]),
     ("Bodies and sketches", ["body", "sketch", "rect", "rrect", "circle", "polygon", "points"]),
-    ("Features", ["pad", "pocket", "revolve", "fillet", "chamfer"]),
+    ("Features", ["pad", "pocket", "revolve", "fillet", "chamfer", "shell", "draft"]),
+    ("Feature patterns and mirrors", ["linear_pattern", "polar_pattern", "mirror", "hole_centres"]),
     ("Turned parts", ["turned", "external_thread"]),
     ("Holes", ["holes", "nut_trap"]),
-    ("Selecting geometry", ["face", "edges"]),
+    ("Selecting geometry", ["face", "faces", "edges"]),
+    ("Standard hardware", ["fasteners"]),
     ("Reference parts, frames and mates", ["ref_part", "set_frames", "get_frame", "set_color", "frame", "frame_on",
                                            "mate"]),
     ("Assemblies (FreeCAD Assembly workbench)", ["assembly", "add", "ground", "joint", "solve", "joint_error"]),
-    ("Patterns", ["bolt_circle", "grid", "rect_pattern"]),
+    ("Point patterns (for at=)", ["bolt_circle", "grid", "rect_pattern"]),
     ("Sheet metal", ["sheet_metal", "sheet_flat", "sheet_data"]),
 ]
 
@@ -102,7 +104,7 @@ def make_fclib_reference():
         if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
             found[node.name] = ("fc.%s%s" % (node.name, _sig(node)), ast.get_docstring(node) or "")
         elif isinstance(node, ast.ClassDef) and not node.name.startswith("_") and node.name not in (
-                "FcError", "Param", "Params", "FaceRef", "EdgeRef"):
+                "FcError", "Param", "Params", "FaceRef", "EdgeRef", "FacesRef"):
             init = next((n for n in node.body if isinstance(n, ast.FunctionDef) and n.name == "__init__"), None)
             found[node.name] = ("fc.%s%s" % (node.name, _sig(init) if init else "()"), ast.get_docstring(node) or "")
     out = ["# fclib reference", "",

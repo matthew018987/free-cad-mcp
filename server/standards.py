@@ -61,6 +61,103 @@ WASHER = {"M2": (2.2, 5.0, 0.3), "M2.5": (2.7, 6.0, 0.5), "M3": (3.2, 7.0, 0.5),
           "M10": (10.5, 20.0, 2.0), "M12": (13.0, 24.0, 2.5), "M16": (17.0, 30.0, 3.0),
           "M20": (21.0, 37.0, 3.0), "M24": (25.0, 44.0, 4.0)}
 
+# Hex socket (key) size s per head type: ISO 4762, ISO 10642, ISO 7380-1
+SOCKET = {
+    "ISO 4762": {"M1.6": 1.5, "M2": 1.5, "M2.5": 2.0, "M3": 2.5, "M4": 3.0, "M5": 4.0, "M6": 5.0, "M8": 6.0,
+                 "M10": 8.0, "M12": 10.0, "M14": 12.0, "M16": 14.0, "M20": 17.0, "M24": 19.0},
+    "ISO 10642": {"M3": 2.0, "M4": 2.5, "M5": 3.0, "M6": 4.0, "M8": 5.0, "M10": 6.0, "M12": 8.0, "M16": 10.0,
+                  "M20": 12.0},
+    "ISO 7380": {"M3": 2.0, "M4": 2.5, "M5": 3.0, "M6": 4.0, "M8": 5.0, "M10": 6.0, "M12": 8.0},
+}
+# Preferred nominal lengths l (ISO 4762 / 10642 / 7380 series; stocked lengths vary by size)
+SCREW_LENGTHS = [2.5, 3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75,
+                 80, 90, 100, 110, 120, 130, 140, 150, 160, 180, 200]
+# Fastener standards fc.fasteners and lookup_standard understand, with older DIN names
+FASTENER_KINDS = {"ISO4762": "ISO 4762", "DIN912": "ISO 4762", "ISO10642": "ISO 10642", "DIN7991": "ISO 10642",
+                  "ISO7380": "ISO 7380", "ISO4032": "ISO 4032", "DIN934": "ISO 4032", "ISO7089": "ISO 7089",
+                  "DIN125": "ISO 7089"}
+_FASTENER_WHAT = {"ISO 4762": ("screw", "socket head cap screw"), "ISO 10642": ("screw", "countersunk socket screw"),
+                  "ISO 7380": ("screw", "button head socket screw"), "ISO 4032": ("nut", "hex nut"),
+                  "ISO 7089": ("washer", "plain washer")}
+
+
+def fastener(spec):
+    """Dimensions of a standard fastener from its order text:
+    'ISO4762 M3x10' (socket head cap screw, l = 10 under the head),
+    'ISO10642 M4x12' (countersunk, l overall), 'ISO7380 M3x8' (button head),
+    'ISO4032 M3' (hex nut), 'ISO7089 M3' (washer); DIN 912 / 7991 / 934 / 125
+    are read as their ISO equivalents. Returns {standard, kind, name, size, d,
+    pitch, …head/nut/washer dimensions, l, spec (order text), notes}."""
+    s = str(spec).strip().replace("×", "x").replace("Ø", "")
+    m = re.match(r"^(ISO|DIN)\s*-?\s*(\d+)(?:-1)?\s+(M\d+(?:\.\d+)?)\s*(?:x\s*(\d+(?:\.\d+)?))?\s*$", s, re.I)
+    if not m:
+        raise ValueError("fastener spec must read like 'ISO4762 M3x10', 'ISO10642 M4x12', 'ISO7380 M3x8', "
+                         "'ISO4032 M3' or 'ISO7089 M3', got %r" % (spec,))
+    key = (m.group(1) + m.group(2)).upper()
+    if key not in FASTENER_KINDS:
+        raise ValueError("unknown fastener standard %s %s — have %s" % (
+            m.group(1).upper(), m.group(2), ", ".join(sorted(set(FASTENER_KINDS.values())))))
+    std = FASTENER_KINDS[key]
+    kind, name = _FASTENER_WHAT[std]
+    size = norm_size(m.group(3))
+    L = float(m.group(4)) if m.group(4) else None
+    out = {"standard": std, "kind": kind, "name": name, "size": size, "d": float(size[1:]), "pitch": PITCH[size],
+           "notes": []}
+    if key.startswith("DIN"):
+        out["notes"].append("%s %s read as %s (dimensions per the ISO standard)" % (m.group(1).upper(),
+                                                                                     m.group(2), std))
+    table = {"ISO 4762": SHCS, "ISO 10642": CSK_HEAD, "ISO 7380": BUTTON_HEAD, "ISO 4032": NUT,
+             "ISO 7089": WASHER}[std]
+    if size not in table:
+        raise ValueError("no %s data for %s (have %s)" % (std, size, ", ".join(s_ for s_ in SIZES if s_ in table)))
+    if kind == "screw":
+        if L is None:
+            raise ValueError("%s needs a length: '%s %sx<l>'" % (std, std.replace(" ", ""), size))
+        if not L > 0:
+            raise ValueError("screw length must be > 0 mm, got %g" % L)
+        dk, k = table[size]
+        out.update(dk=dk, k=k, s=SOCKET[std][size], l=L)
+        if std == "ISO 10642":
+            out["note_l"] = "overall, head included"
+            if L <= k:
+                raise ValueError("%s %sx%g: l must exceed the head height k = %g" % (std, size, L, k))
+        if L not in SCREW_LENGTHS:
+            near = min(SCREW_LENGTHS, key=lambda v: (abs(v - L), v))
+            out["notes"].append("l = %g mm is not a preferred length (nearest %g) — check that it is stocked" % (
+                L, near))
+        out["spec"] = "%s %s×%g" % (std, size, L)
+    else:
+        if L is not None:
+            raise ValueError("%s %s takes no length" % (std, size))
+        if kind == "nut":
+            sw, mh = table[size]
+            out.update(s=sw, m=mh)
+        else:
+            d1, d2, h = table[size]
+            out.update(d1=d1, d2=d2, h=h)
+        out["spec"] = "%s %s" % (std, size)
+    out["source"] = "%s (max head / nut / washer dimensions)%s" % (
+        std, "; socket size per %s" % std if kind == "screw" else "")
+    return out
+
+
+def fastener_report(spec):
+    """lookup_standard(fastener=…): the dimensions fc.fasteners models."""
+    f = fastener(spec)
+    if f["kind"] == "screw":
+        dims = "d %g · head dk %g × k %g · socket s %g · l %g%s" % (
+            f["d"], f["dk"], f["k"], f["s"], f["l"], " (%s)" % f["note_l"] if f.get("note_l") else " under the head")
+    elif f["kind"] == "nut":
+        dims = "d %g · across flats s %g · height m %g" % (f["d"], f["s"], f["m"])
+    else:
+        dims = "d1 %g · d2 %g · thickness h %g" % (f["d1"], f["d2"], f["h"])
+    lines = ["%s — %s, %s×%g" % (f["spec"], f["name"], f["size"], f["pitch"]), "  " + dims,
+             "  source: " + f["source"]]
+    lines += ["  note: " + n for n in f["notes"]]
+    lines.append("  model it: fc.fasteners(%r, on=fc.face(...), at=[...])" % spec)
+    return "\n".join(lines)
+
+
 # Heat-set inserts for 3D prints — vendor-typical (CNC Kitchen / ruthex style):
 # hole diameter, insert length. VERIFY against the insert actually used.
 INSERT = {"M2": (3.2, 4.0), "M2.5": (3.6, 5.7), "M3": (4.0, 5.7), "M4": (5.6, 8.1),

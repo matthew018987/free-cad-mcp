@@ -1487,6 +1487,8 @@ def t_lookup_standard(args):
                 out.append(standards.general_tolerance_report(spec, d))
         if args.get("bearing"):
             out.append(standards.bearing_report(args["bearing"]))
+        if args.get("fastener"):
+            out.append(standards.fastener_report(args["fastener"]))
         if args.get("material"):
             out.append(standards.material_report(args["material"]))
         if args.get("process"):
@@ -1501,6 +1503,7 @@ def t_lookup_standard(args):
                 "lookup_standard(fit='H7/g6', d=8) — ISO 286 limits and fit type; fit='k6' (one class) → its limits\n"
                 "lookup_standard(tolerance='ISO 2768-m', d=80) — general tolerance at a size (without d: the table)\n"
                 "lookup_standard(bearing='608') — deep-groove ball bearing d, D, B, r_s min, seat fits\n"
+                "lookup_standard(fastener='ISO4762 M3x10') — screw / nut / washer dimensions fc.fasteners models\n"
                 "lookup_standard(process='fdm') — process rules of thumb\n"
                 "sizes: %s · hole classes %s · shaft classes %s · up to 250 mm\n"
                 "bearings: %s\nprocesses: %s" % (" ".join(standards.SIZES), standards.HOLE_CLASSES,
@@ -2620,7 +2623,8 @@ TOOLS = [
                     "clearance range and fit type; fit='k6' (one class) with d → that class's limits. "
                     "tolerance='ISO 2768-m' (or 'f'|'m'|'c'|'v') with d=80 → the general tolerance band at that "
                     "size (without d: the whole table). bearing='608' → deep-groove ball bearing bore d, outer D, "
-                    "width B, chamfer r_s min, seat fits. "
+                    "width B, chamfer r_s min, seat fits. fastener='ISO4762 M3x10' | 'ISO4032 M3' | 'ISO7089 M3' → "
+                    "the screw / nut / washer fc.fasteners models. "
                     "process='fdm'|'sla'|'cnc'|'turning'|'laser'|'sheet' → design rules. Several keys can be "
                     "combined in one call.",
      "inputSchema": _obj({"size": {"type": "string", "description": "Metric thread size, e.g. 'M3'."},
@@ -2633,6 +2637,8 @@ TOOLS = [
                                                                          "band at that size."},
                           "bearing": {"type": "string", "description": "Deep-groove ball bearing designation, e.g. "
                                                                        "'608', '6204-2RS', '625'."},
+                          "fastener": {"type": "string", "description": "e.g. 'ISO4762 M3x10', 'ISO10642 M4x12', "
+                                                                        "'ISO7380 M3x8', 'ISO4032 M3', 'ISO7089 M3'."},
                           "d": {"type": "number", "description": "Nominal size in mm for fit / tolerance."},
                           "process": {"type": "string", "enum": ["fdm", "sla", "cnc", "turning", "laser", "sheet"]}})},
     {"name": "export", "handler": t_export, "wants_request_id": True,

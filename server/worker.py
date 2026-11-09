@@ -167,7 +167,7 @@ def sketch_info(sk):
 
 def hole_summary(h):
     try:
-        n = len([g for g in h.Profile[0].Geometry if g.__class__.__name__ == "Circle"])
+        n = len(fc.hole_centres(h))              # pattern / mirror copies included
     except Exception:  # noqa: BLE001
         n = 0
     parts = ["%d×" % n if n else ""]

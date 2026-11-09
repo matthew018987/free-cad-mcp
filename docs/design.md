@@ -398,7 +398,10 @@ Wrappers only where raw FreeCAD is error-prone; everything else is plain FreeCAD
 | Parameters | `fc.params()` → attribute access, synced to the `Params` sheet with expressions |
 | Sketch profiles (fully constrained) | `fc.sketch(body, plane_or_face, *profiles)`, `fc.rect`, `fc.rrect`, `fc.circle`, `fc.slot`, `fc.polygon`, `fc.points` |
 | Features | `fc.pad`, `fc.pocket`, `fc.revolve`, `fc.fillet(edges_selector, r)`, `fc.chamfer` — thin, with readable errors |
-| Selectors | `fc.face(obj, "+Z", z=…)`, `fc.edges(obj, on=face, kind="circle", r=…)` |
+| Shell, draft | `fc.shell(body, open_faces, t, inward)` (PartDesign Thickness), `fc.draft(body, walls, angle, pull, neutral)` — each re-checks its result (wall direction, every wall opening towards the pull) and flips FreeCAD's `Reversed` if needed |
+| Feature patterns | `fc.linear_pattern`, `fc.polar_pattern`, `fc.mirror` (PartDesign LinearPattern / PolarPattern / Mirrored; origin axes and planes, else datum lines and planes). Each records its copy transforms (`FcTransforms`), confirmed against the recomputed geometry, so `fc.hole_centres` gives every copy of a Hole — reports, drawing callouts, DFM and checks keep the hole's spec on patterned and mirrored copies |
+| Selectors | `fc.face(obj, "+Z", z=…)`, `fc.faces(obj, facing= \| parallel= \| kind=, at=)`, `fc.edges(obj, on=face, kind="circle", r=…)` |
+| Standard hardware | `fc.fasteners("ISO4762 M3x10", on, at, offset)` — ISO 4762 / 10642 / 7380 screws, ISO 4032 nuts, ISO 7089 washers (DIN 912 / 7991 / 934 / 125 accepted) as one `bom="buy"` reference part with seat frames; dimensions from `standards.fastener` (also `lookup_standard(fastener=…)`) |
 | Holes and threads | `fc.holes(body, on, at, spec, depth)` → PartDesign::Hole with the right enums (6H, ISO 273 fits, head types); `fc.thread(...)` cosmetic or modelled external threads |
 | Patterns | `fc.bolt_circle(pcd, n, start)`, `fc.grid(nx, ny, px, py)`, `fc.mirror_pts` |
 | Reference parts | `fc.ref_part(name, step=… or envelope=…, frames=…)` — bought-out parts, excluded from mass |
@@ -418,6 +421,8 @@ recall from memory.
 - ISO 261/724 metric threads: pitch, tap drill, minor diameter
 - ISO 4762 / 7380 / 10642 head dimensions → counterbore and countersink dimensions
 - ISO 4032 nuts (nut traps), ISO 7089 washers
+- Hex socket sizes (ISO 4762 / 10642 / 7380) and preferred screw lengths, for
+  `fc.fasteners` and `lookup_standard(fastener=…)`
 - Heat-set inserts (common vendor dimensions, flagged as vendor-specific)
 - ISO 286 fits for common sizes (H7/g6, H7/h6, H7/k6, H7/p6) with limits
 - Process defaults in `project.json`: FDM hole compensation, sliding and press
@@ -572,6 +577,7 @@ workflow never depends on path mapping.
 | `tests/test_packaging.py` | Plugin build, packaged server, reload helper, eval harness with known-good/bad solutions (49) |
 | `tests/test_sheet_metal.py` | Bent sheet metal: folding, flat pattern maths, DFM, flat-pattern DXF, eval case solutions |
 | `tests/test_analysis.py` … `test_evals_plugin.py` | Hardening suites per area: analysis (123), drawings (115), manufacture/standards (116), worker/fclib (110), server (245), reload addon (46), evals/plugin (66) |
+| `tests/test_features.py` | fc.faces, shell, draft, linear / polar patterns, mirror (holes matched on every copy, pattern of a pattern), fasteners (volumes, seating, check_fit stack-ups), lookup_standard(fastener) |
 | `server/fea.py`, `tests/test_fea.py` | Linear-static FEA: case setup on a copy of the part, gmsh mesh, CalculiX solve, result summary, plot; tests against beam theory |
 | `scripts/build_plugin.py` | Builds and validates `dist/` (plugin zip, `.mcpb`, generated `claude plugin eval` suite) |
 | `freecad-addon/` | MCP Reload addon + macro |
@@ -624,4 +630,4 @@ product issues those judges and the designing agent report.
 | FEA (after M5) | 1 new case: `shelf_bracket` — size a printed shelf bracket for SF ≥ 3 and sag ≤ 2 mm | — | 10/10 | The agent designed a 45.5 g ribbed bracket (SF 6.3 away from the screw supports, sag 1.34 mm), bracketed holes-only vs bonded-face supports, and released it. Fixes from its friction: per-quantity convergence with a fixed support zone (a converged sag was tagged "not converged"), what-if `params` for `analyze`, `radial_gap` against a pattern of shanks, `"A\|B"` contact pairs, `lookup_standard(material=…)`, `parts.<Part>.print_up`, the screw spec of reference parts in the README; the case's grader now judges the load case its checks name, on the check's own basis |
 
 Known limits: no half-section views (TechDraw), pocket callouts can crowd
-hole callouts on busy sheets, bent sheet metal is spec-built (`fc.sheet_metal`: no hems, rounded outlines or automatic corner reliefs); FEA bonds parts but has no contact, preload, fatigue or nonlinear buckling.
+hole callouts on busy sheets, bent sheet metal is spec-built (`fc.sheet_metal`: no hems, rounded outlines or automatic corner reliefs); FEA bonds parts but has no contact, preload, fatigue or nonlinear buckling. Fasteners are modelled at the major Ø without thread form, chamfers or under-head fillets; feature patterns are single-direction (no MultiTransform), and a pattern changed in the GUI keeps its recorded copy positions until the next build.
