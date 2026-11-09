@@ -35,7 +35,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
 PLUGIN = os.path.join(DIST, "freecad-design")
 SERVER_FILES = ["freecad_mcp.py", "worker.py", "fclib.py", "analysis.py", "render.py", "standards.py",
-                "manufacture.py", "drawing_worker.py", "drawing_support.py", "fea.py", "fileutil.py", "scene.py", "viewer.py",
+                "tolerancing.py", "manufacture.py", "drawing_worker.py", "drawing_support.py", "fea.py", "fileutil.py", "scene.py", "viewer.py",
                 "launch.sh", "server_instructions.md"]
 
 
