@@ -1,301 +1,168 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Live 3D viewer: a small localhost web server (stdlib only) for the browser page
-viewer/index.html.
+"""Live 3D viewer page (stdlib only): one self-contained HTML file per build.
 
-Every build writes <project>/build/viewer/scene.json and scene.glb (scene.py). The
-page polls /api/scene and reloads the model when the version changes, so the
-user can keep one tab open through the whole design and watch each build
-arrive. With no project in the URL it follows the most recently built project
-under the projects home.
+Every main build writes into <project>/build/viewer/ (scene.py exports the glTF
+inside the FreeCAD worker, then calls write() here):
 
-All state is in the project files, so any freecad-mcp process can serve any
-project. If the port is already held by another freecad-mcp server for the
-same home, that server is reused. If the server holding it stops, the next
-ensure() takes the port over and an open page carries on.
+  <name>.html   the viewer: three.js, the page's code and the model, all inline, so it
+                opens from Finder, in Cowork's file preview or attached to an email
+  scene.js      the build's status, checks and parameters
+  model.js      the model (GLB, base64) with its part list; rewritten only when it changes
+  scene.glb, scene.json   the same data, for other tools
 
-Safety: binds 127.0.0.1 only, rejects requests whose Host header is not local
-(DNS rebinding), sends no CORS headers, and serves only the page plus
-scene.json / scene.glb inside a project the server's own path rules allow."""
+An open page re-reads scene.js once a second through a <script> tag (browsers
+allow that from a local file, where fetch() is blocked) and loads model.js when
+the model changed, so a tab kept open follows every build and keeps its camera.
+Where those files can't be read (a preview, an emailed copy) the page shows the
+build it was written with. Nothing listens on a port.
+
+Browsers refuse ES module files from a local file, so bundle() turns three.js's
+modules and viewer/viewer.js into one classic script: each module becomes a
+function returning its exports, imports become lookups."""
+import base64
+import glob
 import json
 import os
-import threading
-import time
-import urllib.parse
-import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import posixpath
+import re
 
-APP = "freecad-mcp-viewer"
-DEFAULT_PORT = 7787
-SUBDIR = ("build", "viewer")
 HERE = os.path.dirname(os.path.abspath(__file__))
-PAGE = os.path.join(HERE, "viewer", "index.html")
-VENDOR = os.path.join(HERE, "viewer", "vendor")        # three.js r160 (MIT, see vendor/three/LICENSE)
-LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
-
-
-class NotFound(Exception):
-    pass
-
-
-def scene_files(pdir):
-    d = os.path.join(pdir, *SUBDIR)
-    return os.path.join(d, "scene.json"), os.path.join(d, "scene.glb")
-
-
-def project_key(pdir, home):
-    """How the page names a project: its folder name when it sits directly in the
-    home, else its absolute path."""
-    pdir = os.path.abspath(pdir)
-    return os.path.basename(pdir) if os.path.dirname(pdir) == os.path.abspath(home) else pdir
-
-
-class Viewer:
-    """One viewer web server. resolve_project(key) → project dir, raising on a bad or
-    disallowed key (freecad_mcp passes its own project_dir, so the usual roots apply)."""
-
-    def __init__(self, home, resolve_project, port=None):
-        self.home = os.path.abspath(home)
-        self.resolve_project = resolve_project
-        self.port = DEFAULT_PORT if port is None else int(port)
-        self.httpd = None
-        self.url = None
-        self.owner = False
-        self.built = {}                      # project dir → time of the last build seen by this process
-        self.lock = threading.Lock()
-
-    # ------------------------------------------------------------ lifecycle
-
-    def ensure(self):
-        """Start serving (or reuse a live freecad-mcp viewer on the port) and return the URL."""
-        with self.lock:
-            if self.owner:
-                return self.url
-            if self.url and self._ping(self.url):
-                return self.url
-            self.url = None
-            for port in ([self.port, 0] if self.port else [0]):
-                try:
-                    self._serve(port)
-                    return self.url
-                except OSError:
-                    other = "http://127.0.0.1:%d/" % port
-                    if port and self._ping(other):
-                        self.url = other            # another freecad-mcp server for this home
-                        return self.url
-            return None
-
-    def _serve(self, port):
-        viewer = self
-
-        class Handler(_Handler):
-            pass
-        Handler.viewer = viewer
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-        httpd.daemon_threads = True
-        self.httpd = httpd
-        self.owner = True
-        self.url = "http://127.0.0.1:%d/" % httpd.server_address[1]
-        t = threading.Thread(target=httpd.serve_forever, name="viewer", daemon=True)
-        t.start()
-
-    def _ping(self, url):
-        try:
-            with urllib.request.urlopen(url + "api/ping", timeout=1.0) as r:
-                info = json.loads(r.read().decode("utf-8"))
-            return info.get("app") == APP and os.path.abspath(info.get("home", "")) == self.home
-        except Exception:  # noqa: BLE001
-            return False
-
-    def stop(self):
-        with self.lock:
-            if self.httpd is not None:
-                self.httpd.shutdown()
-                self.httpd.server_close()
-            self.httpd, self.url, self.owner = None, None, False
-
-    # ------------------------------------------------------------ state
-
-    def note_built(self, pdir):
-        self.built[os.path.abspath(pdir)] = time.time()
-
-    def link(self, pdir=None):
-        url = self.ensure()
-        if url and pdir:
-            url += "?project=" + urllib.parse.quote(project_key(pdir, self.home), safe="")
-        return url
-
-    def projects(self):
-        """[(mtime, key, pdir)] of projects with a scene: those in the home, plus any
-        this process built elsewhere. Newest first."""
-        seen = {}
-        try:
-            entries = list(os.scandir(self.home))
-        except OSError:
-            entries = []
-        for e in entries:
-            if e.is_dir() and not e.name.startswith("."):
-                sj, _ = scene_files(e.path)
-                try:
-                    seen[os.path.abspath(e.path)] = os.path.getmtime(sj)
-                except OSError:
-                    pass
-        for pdir in list(self.built):
-            sj, _ = scene_files(pdir)
-            try:
-                seen[pdir] = os.path.getmtime(sj)
-            except OSError:
-                pass
-        out = [(m, project_key(p, self.home), p) for p, m in seen.items()]
-        return sorted(out, reverse=True)
-
-    def project(self, key):
-        """(key, project dir) for a key from the page; no key = the newest project."""
-        if not key:
-            ps = self.projects()
-            if not ps:
-                raise NotFound("no project has been built yet")
-            return ps[0][1], ps[0][2]
-        try:
-            pdir = self.resolve_project(key)
-        except Exception as e:  # noqa: BLE001
-            raise NotFound(str(e))
-        return project_key(pdir, self.home), pdir
-
-    def scene(self, key):
-        if not key and not self.projects():
-            return {"project": None, "waiting": True}          # nothing built yet: the page keeps waiting
-        key, pdir = self.project(key)
-        sj, _ = scene_files(pdir)
-        out = {"project": key, "name": os.path.basename(pdir)}
-        try:
-            with open(sj) as fh:
-                out.update(json.load(fh))
-            out["mtime"] = os.path.getmtime(sj)
-        except (OSError, ValueError):
-            out["waiting"] = True            # created, not built yet (or mid-write)
-        return out
-
-    def glb(self, key):
-        _, pdir = self.project(key)
-        _, gp = scene_files(pdir)
-        try:
-            with open(gp, "rb") as fh:
-                return fh.read()
-        except OSError:
-            raise NotFound("no model yet")
-
-
-class _Handler(BaseHTTPRequestHandler):
-    viewer = None
-    server_version = "freecad-mcp-viewer"
-
-    def log_message(self, *args):             # stderr is the MCP server's log; keep it quiet
-        pass
-
-    def _send(self, code, body, ctype, cache="no-store"):
-        if isinstance(body, str):
-            body = body.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", cache)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
-
-    def _json(self, code, data):
-        self._send(code, json.dumps(data, ensure_ascii=False, default=str), "application/json; charset=utf-8")
-
-    def _host_ok(self):
-        host = (self.headers.get("Host") or "").strip().lower()
-        if host.startswith("["):
-            name = host.split("]")[0] + "]"
-        else:
-            name = host.split(":")[0]
-        return name in LOCAL_HOSTS
-
-    def do_HEAD(self):
-        self.do_GET()
-
-    def _vendor(self, path):
-        """A .js file of the bundled three.js — nothing else, and nothing outside vendor/."""
-        rel = urllib.parse.unquote(path[len("/vendor/"):])
-        p = os.path.realpath(os.path.join(VENDOR, rel))
-        if not p.endswith(".js") or not p.startswith(os.path.realpath(VENDOR) + os.sep) or not os.path.isfile(p):
-            raise NotFound("not found")
-        with open(p, "rb") as fh:
-            return self._send(200, fh.read(), "text/javascript; charset=utf-8", cache="max-age=86400")
-
-    def do_GET(self):
-        if not self._host_ok():
-            return self._send(403, "forbidden", "text/plain; charset=utf-8")
-        u = urllib.parse.urlsplit(self.path)
-        q = urllib.parse.parse_qs(u.query)
-        key = (q.get("project") or [""])[0]
-        v = self.viewer
-        try:
-            if u.path in ("/", "/index.html"):
-                with open(PAGE, "rb") as fh:
-                    return self._send(200, fh.read(), "text/html; charset=utf-8")
-            if u.path.startswith("/vendor/"):
-                return self._vendor(u.path)
-            if u.path == "/api/ping":
-                return self._json(200, {"app": APP, "home": v.home, "pid": os.getpid()})
-            if u.path == "/api/projects":
-                return self._json(200, {"projects": [{"project": k, "name": os.path.basename(p), "mtime": m}
-                                                     for m, k, p in v.projects()]})
-            if u.path == "/api/scene":
-                return self._json(200, v.scene(key))
-            if u.path == "/api/glb":
-                return self._send(200, v.glb(key), "model/gltf-binary")
-            return self._json(404, {"error": "not found"})
-        except NotFound as e:
-            return self._json(404, {"error": str(e)})
-        except Exception as e:  # noqa: BLE001
-            return self._json(500, {"error": str(e)})
-
-
-# ------------------------------------------------------------ the server's one viewer
-
-_viewer = None
-_viewer_lock = threading.Lock()
+PAGE_DIR = os.path.join(HERE, "viewer")
+TEMPLATE = os.path.join(PAGE_DIR, "index.html")
+THREE = os.path.join(PAGE_DIR, "vendor", "three")        # three.js r160, unmodified (MIT, see LICENSE there)
+MODULES = [                                              # in dependency order
+    ("three", "vendor/three/build/three.module.min.js"),
+    ("three/addons/utils/BufferGeometryUtils.js", "vendor/three/examples/jsm/utils/BufferGeometryUtils.js"),
+    ("three/addons/controls/OrbitControls.js", "vendor/three/examples/jsm/controls/OrbitControls.js"),
+    ("three/addons/loaders/GLTFLoader.js", "vendor/three/examples/jsm/loaders/GLTFLoader.js"),
+    ("viewer", "viewer.js"),
+]
+SCENE_JS, MODEL_JS = "scene.js", "model.js"
+_SPECS = {s for s, _ in MODULES}
+REG = "__fcmcpModules"                   # the bundle's module table (no module uses this name)
 
 
 def enabled():
+    """FREECAD_MCP_VIEWER=0 turns the viewer page (and the scene export) off."""
     return os.environ.get("FREECAD_MCP_VIEWER", "1").strip().lower() not in ("0", "off", "false", "no")
 
 
-def get(home, resolve_project):
-    """The process's Viewer (None when FREECAD_MCP_VIEWER=0). A changed home starts a new one."""
-    global _viewer
-    if not enabled():
-        return None
-    with _viewer_lock:
-        if _viewer is None or _viewer.home != os.path.abspath(home):
-            if _viewer is not None:
-                _viewer.stop()
-            port = os.environ.get("FREECAD_MCP_VIEWER_PORT", "").strip()
-            _viewer = Viewer(home, resolve_project, port=int(port) if port.isdigit() else None)
-        return _viewer
+# ------------------------------------------------------------ bundling
+
+_IMPORT = re.compile(r"""^[ \t]*import\s+(?:\*\s+as\s+(\w+)|\{([^}]*)\})\s+from\s+['"]([^'"]+)['"][ \t]*;?""", re.M)
+_EXPORT_LIST = re.compile(r"\bexport\s*\{([^}]*)\}\s*;?")
+_EXPORT_DECL = re.compile(r"^([ \t]*)export\s+((?:async\s+)?(?:function\*?|class|const|let|var)\s+([\w$]+))", re.M)
 
 
-if __name__ == "__main__":                    # serve a home on its own, e.g. for working on the page
-    import argparse
-    ap = argparse.ArgumentParser(description="Serve the live 3D viewer for a projects home.")
-    ap.add_argument("--home", default=os.path.expanduser("~/CAD"))
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
-    a = ap.parse_args()
+def _names(spec):
+    """'a, b as c' → [('a', 'a'), ('b', 'c')] as (local or source name, bound name)."""
+    out = []
+    for part in spec.split(","):
+        bits = part.split()
+        if len(bits) == 1:
+            out.append((bits[0], bits[0]))
+        elif len(bits) == 3 and bits[1] == "as":
+            out.append((bits[0], bits[2]))
+        elif bits:
+            raise ValueError("cannot read import/export list entry %r" % part.strip())
+    return out
 
-    def _resolve(key):
-        p = os.path.abspath(os.path.join(a.home, os.path.expanduser(key)))
-        if not os.path.isdir(p):
-            raise NotFound("no project %s" % key)
-        return p
-    vw = Viewer(a.home, _resolve, port=a.port)
-    print("viewer: %s (home %s)" % (vw.ensure(), vw.home), flush=True)
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
+
+def _as_function(spec, src):
+    """An ES module's source as `(function () { … return {exports}; })()`; imports read REG[…]."""
+    def imp(m):
+        star, names, frm = m.group(1), m.group(2), m.group(3)
+        if frm.startswith("."):
+            frm = posixpath.normpath(posixpath.join(posixpath.dirname(spec), frm))
+        if frm not in _SPECS:
+            raise ValueError("%s imports %s, which is not bundled" % (spec, frm))
+        ref = "%s[%s]" % (REG, json.dumps(frm))
+        if star:
+            return "const %s = %s;" % (star, ref)
+        return "const { %s } = %s;" % (", ".join(a if a == b else "%s: %s" % (a, b) for a, b in _names(names)), ref)
+    exports = []
+
+    def exp_list(m):
+        exports.extend(_names(m.group(1)))
+        return ""
+
+    def exp_decl(m):
+        exports.append((m.group(3), m.group(3)))
+        return m.group(1) + m.group(2)
+    src = _IMPORT.sub(imp, src)
+    src = _EXPORT_DECL.sub(exp_decl, src)
+    src = _EXPORT_LIST.sub(exp_list, src)
+    body = ", ".join(json.dumps(name) + ": " + local for local, name in exports)
+    return "%s[%s] = (function () {\n%s\nreturn { %s };\n})();\n" % (REG, json.dumps(spec), src, body)
+
+
+def bundle():
+    """three.js, its add-ons and viewer.js as one classic script, three.js's licence on top."""
+    with open(os.path.join(THREE, "LICENSE")) as fh:
+        lic = fh.read().strip()
+    parts = ["/*! three.js r160 (https://threejs.org), bundled unmodified apart from module wrapping.\n\n%s\n*/\n"
+             % lic.replace("*/", "* /"),
+             "(function () {\n\"use strict\";\nconst %s = {};\n" % REG]
+    for spec, rel in MODULES:
+        with open(os.path.join(PAGE_DIR, rel)) as fh:
+            parts.append(_as_function(spec, fh.read()))
+    parts.append("})();\n")
+    return "".join(parts).replace("</script", "<\\/script")
+
+
+# ------------------------------------------------------------ the page and the live feed
+
+def _json(data):
+    """JSON safe inside <script> and as a JavaScript expression (no '<', no raw U+2028)."""
+    return json.dumps(data, ensure_ascii=True, default=str).replace("<", "\\u003c")
+
+
+def page(scene, model=None, glb=None):
+    """The viewer HTML for one build: scene = the build's status (scene.json), model = {version,
+    rev, parts} of the GLB bytes `glb`, or None when there is no model to show."""
+    with open(TEMPLATE) as fh:
+        html = fh.read()
+    data = ['<script type="application/json" id="fcmcp-scene">%s</script>' % _json(scene)]
+    if model and glb:
+        data.append('<script type="application/json" id="fcmcp-model">%s</script>' % _json(model))
+        data.append('<script type="text/plain" id="fcmcp-glb">%s</script>' % base64.b64encode(glb).decode("ascii"))
+    for marker, text in (("<!--fcmcp:data-->", "\n".join(data)), ("<!--fcmcp:script-->",
+                                                                  "<script>\n%s</script>" % bundle())):
+        if html.count(marker) != 1:
+            raise ValueError("viewer/index.html must contain %s once" % marker)
+        html = html.replace(marker, text)
+    return html
+
+
+def write_text(path, text):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
+def page_name(name):
+    return (re.sub(r"[^\w.-]+", "_", name or "").strip("._") or "viewer") + ".html"
+
+
+def write(out, scene, glb_path=None, model_changed=True):
+    """Write model.js (when the model changed or is missing), scene.js and <name>.html into
+    `out` from the build's scene.json data and GLB. Returns the page's path."""
+    glb, model = None, None
+    if glb_path and scene.get("model"):
+        with open(glb_path, "rb") as fh:
+            glb = fh.read()
+        model = {"version": scene["model"], "rev": scene.get("glb_rev"), "parts": scene.get("parts", [])}
+        mp = os.path.join(out, MODEL_JS)
+        if model_changed or not os.path.isfile(mp):
+            write_text(mp, "fcmcpModel(%s, \"%s\");\n" % (_json(model), base64.b64encode(glb).decode("ascii")))
+    write_text(os.path.join(out, SCENE_JS), "fcmcpScene(%s);\n" % _json(scene))
+    path = os.path.join(out, page_name(scene.get("name")))
+    write_text(path, page(scene, model, glb))
+    return path
+
+
+def find_page(pdir):
+    """The newest viewer page a build wrote in the project, or None."""
+    pages = glob.glob(os.path.join(glob.escape(pdir), "build", "viewer", "*.html"))
+    return max(pages, key=os.path.getmtime) if pages else None

@@ -102,7 +102,7 @@ the design playbook (the `guide` tool serves the same text).
 | `export` | STEP/IGES, 3MF/STL/OBJ, BREP and DXF/SVG profiles, each verified |
 | `release` | Build, checks, manufacturability, exports, drawings, BOM and notes → zip; refuses to ship a failing design |
 | `job_status` | Collect background work |
-| `open_in_gui` | Open a file in the FreeCAD GUI; `install_reload_helper` (with your OK) installs MCP Reload; `viewer: true` opens the live 3D viewer in your browser instead |
+| `open_in_gui` | Open a file in the FreeCAD GUI; `install_reload_helper` (with your OK) installs MCP Reload; `viewer: true` opens the project's live 3D view in your browser instead |
 
 Inside `model.py`, `fc` (`server/fclib.py`) provides parameters bound to a
 spreadsheet, fully constrained sketch profiles, standard holes, reference
@@ -113,11 +113,11 @@ and `checks.json`, in global coordinates.
 
 ## Live 3D viewer
 
-The server runs a small web page on `http://127.0.0.1:7787/` (`freecad_status`
-and `create_project` give the link, and `open_in_gui(viewer=true)` opens it).
-Keep it open for the whole design: after every build it reloads the model and
-keeps your camera where you left it. With no `?project=` in the address it
-follows whichever project was built last.
+Every build writes `build/viewer/<name>.html`: one file holding the viewer
+and the model, so it also opens in Cowork's file preview or as an email
+attachment. `open_in_gui(viewer=true)` opens it in your browser (the first
+build's reply names it). Keep it open for the whole design: after every build
+it reloads the model and keeps your camera where you left it.
 
 - Rotate (drag), pan (right-drag), zoom (scroll), view presets matching the
   server's renders (Front looks toward +Y), orthographic or perspective.
@@ -129,12 +129,12 @@ follows whichever project was built last.
   panel. A failed build shows its error; if it made no geometry the last model
   stays on screen.
 
-Each build writes `build/viewer/scene.glb` (FreeCAD's own glTF export, one
-node per part) and `scene.json`. The page uses three.js, bundled in
-`server/viewer/vendor/three/`, so it works offline. The server listens
-on 127.0.0.1 only and serves nothing but the page and those two files. Any
-running freecad-mcp server for the same home can serve the page, so it keeps
-working when Claude restarts the server.
+There is no web server. The page re-reads `scene.js` and `model.js` next to it
+once a second, so it follows the builds while it stays in the project's
+`build/viewer/` folder; a copy anywhere else shows the build it was written
+with (marked *snapshot*). The same folder holds `scene.glb` (FreeCAD's own
+glTF export, one node per part) and `scene.json`. three.js is bundled, so the
+page works offline.
 
 ## Live view in FreeCAD
 
@@ -149,9 +149,10 @@ the `MCP_Reload` macro to switch it off or on.
 `server/viewer/vendor/three/` holds four files of [three.js](https://threejs.org)
 r160 (`three.module.min.js`, `GLTFLoader.js`, `BufferGeometryUtils.js`,
 `OrbitControls.js`), copied unmodified from the npm package with their MIT
-licence (`server/viewer/vendor/three/LICENSE`). To update them, replace the
-files with the same paths from a newer `three` package and change the version
-in `server/viewer/index.html`.
+licence (`server/viewer/vendor/three/LICENSE`). `server/viewer.py` inlines them
+into each viewer page, with the licence text at the top of its script. To
+update them, replace the files with the same paths from a newer `three`
+package and change the version in that header.
 
 ## Configuration
 
@@ -161,8 +162,7 @@ in `server/viewer/index.html`.
 | `FREECAD_PYTHON` | Interpreter `launch.sh` starts the server with (default: FreeCAD's bundled Python) |
 | `FREECAD_MCP_HOME` | Projects directory (default `~/CAD`) |
 | `FREECAD_MCP_ROOTS` | `:`-separated allow-list of directories the server may touch |
-| `FREECAD_MCP_VIEWER` | `0` turns the live 3D viewer and its scene export off |
-| `FREECAD_MCP_VIEWER_PORT` | Viewer port (default 7787; if another program holds it, a free port is used) |
+| `FREECAD_MCP_VIEWER` | `0` turns the live 3D viewer page and its scene export off |
 
 ## Layout
 
@@ -177,8 +177,8 @@ server/                  the MCP server and the FreeCAD workers
   analysis.py            measure, check_fit, section, checks
   render.py              headless renderer
   scene.py               live viewer scene: glTF + scene.json per build
-  viewer.py              live viewer web server (stdlib only)
-  viewer/                the viewer page; vendor/three/ is three.js r160 (MIT)
+  viewer.py              writes the self-contained viewer page (stdlib only)
+  viewer/                page template and viewer.js; vendor/three/ is three.js r160 (MIT)
   manufacture.py         exports, DFM checks, release package
   drawing_worker.py      TechDraw drawings (in the FreeCAD GUI process)
   fea.py                 FEA: gmsh mesh, CalculiX solve, results

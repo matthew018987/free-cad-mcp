@@ -262,7 +262,7 @@ fc.mate(motor, "mount", fc.frame_on(fc.face(base, "-Z")), mode="against")
 | 14 | `lookup_standard` | Holes, threads, fasteners, inserts, fits (§9) | `kind, size, …` → dimensions with source |
 | 15 | `drawing` | TechDraw read, create, annotate, export (§7.7) | `doc, page?, ops[]?, export?` → inventory + preview PNG + files |
 | 16 | `export` | STEP, STL, 3MF, BREP, IGES, OBJ; DXF/SVG for sections and projections | `doc, objects, format, tolerance?` |
-| 17 | `open_in_gui` | Open the file in FreeCAD, launching it if needed; `viewer=true` opens the live 3D viewer in the browser | `path, viewer?` |
+| 17 | `open_in_gui` | Open the file in FreeCAD, launching it if needed; `viewer=true` opens the live 3D view in the browser | `path, viewer?` |
 | 18 | `job_status` | Poll or collect background work | `job_id?, wait_seconds?` |
 
 Every tool that takes `doc` accepts `.FCStd`, `.step`/`.stp`, `.brep` or
@@ -510,16 +510,22 @@ open boundary is its edge loop, so three.js `EdgesGeometry` draws the true CAD
 edges (cylinder seams close up because positions are matched). `scene.json`
 carries labels, colours, reference or made part, revision, status, errors,
 checks and parameters. A build that makes no geometry keeps the previous GLB
-and records which revision it shows (`glb_rev`). `server/viewer.py` is a
-stdlib `ThreadingHTTPServer` in the MCP process, started on first use
-(`freecad_status`, `create_project`, `build`). It binds 127.0.0.1, refuses
-non-local `Host` headers (DNS rebinding), sends no CORS headers, and serves
-only the page plus those two files inside a project that `project_dir`
-allows. All state is in the project files, so a second server for the same
-home reuses the port and takes it over when the first one exits. The page
-(`server/viewer/index.html`, with three.js r160 bundled under `server/viewer/vendor/three/` (MIT), so it works offline) polls once a
-second, renders only when something changed, keeps the camera across rebuilds,
-and draws section caps with the stencil buffer.
+and records which revision it shows (`glb_rev`). `server/viewer.py` (stdlib)
+then writes the page, `build/viewer/<name>.html`, with everything inline: the
+template `server/viewer/index.html`, the build's status and model (GLB as
+base64), and one script. Browsers refuse ES module files from a local file, so
+the script is a bundle: three.js r160 (vendored under
+`server/viewer/vendor/three/`, MIT) and `server/viewer/viewer.js`, each module
+wrapped in a function returning its exports, imports turned into lookups.
+Beside the page, `scene.js` (status) and `model.js` (model, rewritten only when
+it changes) call `fcmcpScene(…)` / `fcmcpModel(…)`. An open page re-reads
+`scene.js` once a second through a script element, which browsers allow from a
+local file where `fetch()` is blocked, and loads `model.js` when the model
+changed. A copy away from that folder (Cowork's preview, an email) can't read
+them and shows the build it carries, marked *snapshot*. There is no web
+server, so nothing listens on a port. The page renders only when something
+changed, keeps the camera across rebuilds, and draws section caps with the
+stencil buffer.
 
 Why not render Claude's images this way too? Claude only sees PNGs in tool
 results and can't turn a page, and a headless browser would add a Chromium
@@ -553,7 +559,7 @@ workflow never depends on path mapping.
 | `server/worker.py` | One request per FreeCAD process: `probe`, `build` (report, history, Δ, overwrite guard), `run_script`, `inspect` (geometry index, hole detection), `render` |
 | `server/fclib.py` | `fc` inside scripts: params ↔ spreadsheet binding, fully constrained profiles, features, selectors, holes, ref parts, frames, mates, patterns |
 | `server/render.py` | Headless renderer: vectorised z-buffer, BREP edges, silhouettes, hidden lines, sections with hatching, view grids; highlighted items over wireframe context |
-| `server/scene.py`, `server/viewer.py`, `server/viewer/index.html`, `tests/test_viewer.py` | Live 3D viewer: per-build glTF scene, localhost web server, three.js page (rotate, section with caps, part toggles, x-ray, measure, checks) |
+| `server/scene.py`, `server/viewer.py`, `server/viewer/` (`index.html`, `viewer.js`), `tests/test_viewer.py` | Live 3D viewer: per-build glTF scene, self-contained three.js page and its scene.js / model.js feed (rotate, section with caps, part toggles, x-ray, measure, checks) |
 | `server/analysis.py` | Worker side: introspection in global coordinates (containers, links), hole detection, geometry references, `measure`, `check_fit`, `section` (+ matplotlib plot with zoomed insets), `checks.json` evaluation, snapshots and GUI-edit diffs |
 | `server/fileutil.py` | Stdlib helpers shared by the server and the workers: file hashes and numbered revisions (`<stem>.rNN.FCStd`) |
 | `server/standards.py` | Stdlib tables shared by the server and fclib: ISO 261/262, 273, 4762 + DIN 974-1, 10642, 7380, 4032, 7089, ISO 286 (IT6–8, up to 250 mm), heat-set inserts (vendor-typical), process rules |

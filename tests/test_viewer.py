@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""server/viewer.py (the live 3D viewer's web server) and, with --real, the scene a
-real build writes (server/scene.py through the worker).
+"""server/viewer.py (the self-contained viewer page) and, with --real, the page a real
+build writes (server/scene.py through the worker).
 
-Part 1 runs a Viewer in-process against a temporary home with hand-made scene files:
-endpoints, newest-project following, the Host check, path rules, port reuse and
-takeover. Part 2 (--real) drives the real server over stdio: a build writes
-build/viewer/scene.glb + scene.json, freecad_status and create_project report the
-viewer link, and a second build changes the scene's version.
+Part 1 runs viewer.py in-process: the bundle (three.js + viewer.js as one classic
+script, compiled by macOS's JavaScriptCore when osascript is there), the page and
+its inline data, the scene.js / model.js feed and escaping. Part 2 (--real) drives
+the real server over stdio: a build writes build/viewer/<name>.html with its feed,
+the reply names it once, rebuilds, variants and failed builds update it as they should,
+and open_in_gui(viewer=true) refuses a project with no page yet.
 
     python3 tests/test_viewer.py            # part 1
     python3 tests/test_viewer.py --real     # both parts
 """
+import base64
+import glob
 import json
 import os
+import re
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
-import time
-import urllib.error
-import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -30,147 +32,97 @@ from mcp_client import check, fails  # noqa: E402
 import viewer  # noqa: E402
 
 tmp = tempfile.mkdtemp(prefix="viewer_test_")
-home = os.path.join(tmp, "home")
-outside = os.path.join(tmp, "outside")
-os.makedirs(home)
-os.makedirs(outside)
 
 
-def make_scene(pdir, rev, glb=b"glTF-test", parts=("Bracket",)):
-    d = os.path.join(pdir, "build", "viewer")
-    os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "scene.glb"), "wb") as fh:
-        fh.write(glb)
-    with open(os.path.join(d, "scene.json"), "w") as fh:
-        json.dump({"rev": rev, "ok": True, "version": "%s-%d" % (rev, time.time() * 1000), "glb": "scene.glb",
-                   "parts": [{"node": "p%d" % i, "label": p, "ref": False, "colour": [0.5, 0.5, 0.5]}
-                             for i, p in enumerate(parts)], "checks": []}, fh)
+def inline(html, ident):
+    m = re.search(r'<script type="[^"]+" id="%s">(.*?)</script>' % ident, html, re.S)
+    return m.group(1) if m else None
 
 
-def get(url, host=None):
-    req = urllib.request.Request(url)
-    if host:
-        req.add_header("Host", host)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status, r.read(), r.headers.get("Content-Type", "")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read(), e.headers.get("Content-Type", "")
+def feed(path, fn):
+    """The arguments of scene.js / model.js: fn(<json>[, "<base64>"]);"""
+    text = open(path).read()
+    m = re.match(r'^%s\((.*?)(?:, "([A-Za-z0-9+/=]*)")?\);\n$' % fn, text, re.S)
+    return (json.loads(m.group(1)), m.group(2)) if m else (None, None)
 
 
-def resolver(key):
-    """Like freecad_mcp.project_dir: a name under the home or a path, kept inside allowed roots."""
-    p = os.path.abspath(os.path.join(home, os.path.expanduser(key)))
-    if not (p.startswith(home + os.sep) or p.startswith(outside + os.sep)):
-        raise ValueError("%s is outside the allowed roots" % p)
-    if not os.path.isdir(p):
-        raise ValueError("no project at %s" % p)
-    return p
-
-
-print("viewer server (part 1)")
+print("viewer page (part 1)")
 try:
-    v = viewer.Viewer(home, resolver, port=0)
-    url = v.ensure()
-    check("starts on 127.0.0.1 and returns its URL", url and url.startswith("http://127.0.0.1:"), url)
-    check("ensure() again returns the same URL", v.ensure() == url)
-    code, body, ctype = get(url)
-    check("/ serves the page", code == 200 and b"FreeCAD Live View" in body and ctype.startswith("text/html"),
-          (code, body[:80]))
-    check("…which loads three.js from this server, not a CDN (works offline)",
-          b'"/vendor/three/build/three.module.min.js"' in body and b"cdn.jsdelivr" not in body and b"unpkg" not in body)
-    code, js, ctype = get(url + "vendor/three/build/three.module.min.js")
-    check("/vendor serves the bundled three.js as JavaScript", code == 200 and len(js) > 600000
-          and ctype.startswith("text/javascript"), (code, len(js), ctype))
-    code, js, _ = get(url + "vendor/three/examples/jsm/loaders/GLTFLoader.js")
-    check("…and the add-ons the page imports", code == 200 and b"class GLTFLoader" in js, code)
-    lic = open(os.path.join(viewer.VENDOR, "three", "LICENSE")).read()
-    check("three.js's MIT licence ships next to it", "The MIT License" in lic and "three.js authors" in lic)
-    for bad in ("vendor/three/LICENSE", "vendor/../viewer.py", "vendor/three/../../../viewer.py",
-                "vendor/%2e%2e/%2e%2e/viewer.py", "vendor/three/build/missing.js"):
-        code, _, _ = get(url + bad)
-        check("…but nothing else under /vendor: %s → 404" % bad, code == 404, code)
-    code, body, _ = get(url + "api/ping")
-    info = json.loads(body)
-    check("/api/ping names the app and home", info.get("app") == viewer.APP and info.get("home") == home, info)
+    b = viewer.bundle()
+    check("the bundle has no import/export left (a classic script runs from a local file)",
+          not re.search(r"(?m)^\s*(?:import|export)\s*[{*\w]", b), re.findall(r"(?m)^\s*(?:import|export).{0,60}", b)[:3])
+    check("…defines every module, three.js first", [m for m in re.findall(r'__fcmcpModules\["([^"]+)"\] = \(function', b)]
+          == [s for s, _ in viewer.MODULES])
+    check("…starts with three.js's MIT licence", b.startswith("/*! three.js r160") and "The MIT License" in b[:2000]
+          and "three.js authors" in b[:2000])
+    check("…and nothing that would end the inline <script> early", "</script" not in b.lower() and "<!--" not in b)
+    lic = open(os.path.join(viewer.THREE, "LICENSE")).read()
+    check("three.js's licence file ships with the vendored files", "The MIT License" in lic)
+    if shutil.which("osascript"):
+        js = os.path.join(tmp, "bundle.js")
+        with open(js, "w") as fh:
+            fh.write(b)
+        jxa = os.path.join(tmp, "compile.js")
+        with open(jxa, "w") as fh:
+            fh.write("ObjC.import('Foundation');\nfunction run(argv) {\n  new Function($.NSString."
+                     "stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null).js);\n"
+                     "  return 'ok';\n}\n")
+        r = subprocess.run(["osascript", "-l", "JavaScript", jxa, js], capture_output=True, text=True, timeout=120)
+        check("…and it compiles (JavaScriptCore)", r.returncode == 0 and r.stdout.strip() == "ok", r.stderr[-400:])
 
-    code, body, _ = get(url + "api/scene")
-    data = json.loads(body)
-    check("no build yet → waiting (200, so an open page logs no errors)", code == 200 and data.get("waiting") is True
-          and data.get("project") is None, (code, body))
+    out = os.path.join(tmp, "p", "build", "viewer")
+    os.makedirs(out)
+    glb = os.path.join(out, "scene.glb")
+    data = b"glTF\x02\x00\x00\x00" + bytes(range(256)) * 4
+    with open(glb, "wb") as fh:
+        fh.write(data)
+    evil = "</script><script>alert(1)</script>"
+    scene = {"name": "Bracket v2", "rev": "r0003", "ok": True, "version": "r0003-1", "model": "r0003-1",
+             "glb": "scene.glb", "glb_rev": "r0003", "checks": [{"id": "seat", "ok": True, "value": "0.35 mm"}],
+             "parts": [{"node": "p0", "label": evil, "ref": False, "colour": [0.5, 0.5, 0.5]}],
+             "params": {"note": "a\u2028b <!-- c"}}
+    page = viewer.write(out, scene, glb)
+    check("write() makes <name>.html with a safe file name", os.path.basename(page) == "Bracket_v2.html", page)
+    html = open(page).read()
+    outside = re.sub(r"<script\b.*?</script>", "", html, flags=re.S)
+    check("the page loads nothing from elsewhere (no src/href except data:, no import map, no modules)",
+          not re.search(r"""(?:src|href)\s*=\s*["'](?!data:)""", outside) and "importmap" not in html
+          and 'type="module"' not in html, re.findall(r"(?:src|href)=\S+", outside))
+    check("…and has exactly its four scripts: scene, model, GLB, code",
+          len(re.findall(r"<script\b", html)) == 4 and html.count("</script>") == 4,
+          re.findall(r"<script\b[^>]*>", html))
+    check("the build's status is inline", json.loads(inline(html, "fcmcp-scene")) == json.loads(json.dumps(scene)))
+    m = json.loads(inline(html, "fcmcp-model") or "{}")
+    check("…with the model's version, revision and parts", m.get("version") == "r0003-1" and m.get("rev") == "r0003"
+          and m.get("parts", [{}])[0].get("label") == evil, m)
+    check("…and the GLB, byte for byte", base64.b64decode(inline(html, "fcmcp-glb") or "") == data)
+    check("a label with </script> stays inside its JSON", evil not in html and "\\u003c/script>" in html)
+    st, _ = feed(os.path.join(out, "scene.js"), "fcmcpScene")
+    check("scene.js calls fcmcpScene(status)", st == json.loads(json.dumps(scene)), open(os.path.join(out, "scene.js")).read()[:200])
+    check("…with U+2028 escaped (a valid script)", "\u2028" not in open(os.path.join(out, "scene.js")).read())
+    mm, b64 = feed(os.path.join(out, "model.js"), "fcmcpModel")
+    check("model.js calls fcmcpModel(model, base64)", mm == m and base64.b64decode(b64 or "") == data)
 
-    os.makedirs(os.path.join(home, "plate"))
-    code, body, _ = get(url + "api/scene?project=plate")
-    data = json.loads(body)
-    check("a project without a scene → waiting", code == 200 and data.get("waiting") is True
-          and data.get("project") == "plate", data)
-
-    make_scene(os.path.join(home, "plate"), "r0001")
-    time.sleep(0.02)
-    os.makedirs(os.path.join(home, "shaft"))
-    make_scene(os.path.join(home, "shaft"), "r0004", glb=b"glTF-shaft", parts=("Shaft", "Bearing"))
-    code, body, _ = get(url + "api/scene")
-    data = json.loads(body)
-    check("no project in the URL → the newest built project", code == 200 and data.get("project") == "shaft"
-          and data.get("rev") == "r0004" and data.get("mtime"), data)
-    code, body, ctype = get(url + "api/glb?project=plate&v=1")
-    check("/api/glb returns the project's GLB bytes", code == 200 and body == b"glTF-test"
-          and ctype == "model/gltf-binary", (code, body, ctype))
-    code, body, _ = get(url + "api/projects")
-    names = [p["project"] for p in json.loads(body)["projects"]]
-    check("/api/projects lists built projects, newest first", names == ["shaft", "plate"], names)
-
-    time.sleep(0.02)
-    make_scene(os.path.join(home, "plate"), "r0002")
-    data = json.loads(get(url + "api/scene")[1])
-    check("a rebuild makes that project the newest", data.get("project") == "plate" and data.get("rev") == "r0002",
-          data)
-
-    ext = os.path.join(outside, "far_project")
-    os.makedirs(ext)
-    time.sleep(0.02)
-    make_scene(ext, "r0009")
-    data = json.loads(get(url + "api/scene")[1])
-    check("a project outside the home is not followed until this process builds it", data.get("project") == "plate",
-          data)
-    v.note_built(ext)
-    data = json.loads(get(url + "api/scene")[1])
-    check("…then it is (keyed by its path)", data.get("project") == ext and data.get("rev") == "r0009", data)
-    check("link() names the project", v.link(ext).endswith("?project=" + urllib.request.quote(ext, safe="")),
-          v.link(ext))
-    check("link() of a home project uses its folder name", v.link(os.path.join(home, "plate")).endswith("?project=plate"))
-
-    code, body, _ = get(url + "api/scene?project=" + urllib.request.quote("../../etc"))
-    check("a key outside the allowed roots → 404, nothing read", code == 404 and b"outside" in body, (code, body))
-    code, body, _ = get(url + "api/glb?project=" + urllib.request.quote(os.path.join(home, "plate", "build")))
-    check("only build/viewer/scene.glb inside a project is served", code == 404, (code, body))
-    code, _, _ = get(url + "etc/passwd")
-    check("unknown paths → 404", code == 404)
-
-    port = int(url.rstrip("/").rsplit(":", 1)[1])
-    code, _, _ = get(url + "api/ping", host="evil.example:%d" % port)
-    check("a non-local Host header is refused (DNS rebinding)", code == 403, code)
-    code, _, _ = get(url + "api/ping", host="localhost:%d" % port)
-    check("Host localhost is accepted", code == 200, code)
-
-    v2 = viewer.Viewer(home, resolver, port=port)
-    check("a second server for the same home on a taken port reuses the first",
-          v2.ensure() == url and not v2.owner, (v2.url, v2.owner))
-    other_home = os.path.join(tmp, "other_home")
-    os.makedirs(other_home)
-    v3 = viewer.Viewer(other_home, resolver, port=port)
-    u3 = v3.ensure()
-    check("a server for another home does not reuse it — it takes a free port", u3 and u3 != url and v3.owner, u3)
-    v3.stop()
-    v.stop()
-    check("after the first server stops, the reusing one takes the port over",
-          v2.ensure() == url and v2.owner, (v2.url, v2.owner))
-    check("…and serves the same scenes", json.loads(get(url + "api/scene?project=shaft")[1]).get("rev") == "r0004")
-    v2.stop()
-
+    mtime = os.path.getmtime(os.path.join(out, "model.js"))
+    os.utime(os.path.join(out, "model.js"), (mtime - 100, mtime - 100))
+    scene2 = dict(scene, rev="r0004", version="r0004-1", ok=False, glb_rev="r0003", script_error="boom")
+    viewer.write(out, scene2, glb, model_changed=False)
+    check("a build that keeps the model leaves model.js alone",
+          os.path.getmtime(os.path.join(out, "model.js")) == mtime - 100)
+    st, _ = feed(os.path.join(out, "scene.js"), "fcmcpScene")
+    html = open(page).read()
+    check("…but updates scene.js and the page", st.get("rev") == "r0004" and st.get("script_error") == "boom"
+          and json.loads(inline(html, "fcmcp-scene"))["rev"] == "r0004" and inline(html, "fcmcp-glb"))
+    viewer.write(out, dict(scene, rev="r0005", version="r0005-1", model=None, glb=None, parts=[]), None)
+    html = open(page).read()
+    check("a scene with no model writes a page without model data", inline(html, "fcmcp-model") is None
+          and inline(html, "fcmcp-glb") is None and json.loads(inline(html, "fcmcp-scene"))["rev"] == "r0005")
+    check("find_page() finds the project's page", viewer.find_page(os.path.join(tmp, "p")) == page)
+    check("…and None for a project without one", viewer.find_page(tmp) is None)
     os.environ["FREECAD_MCP_VIEWER"] = "0"
-    check("FREECAD_MCP_VIEWER=0 turns the viewer off", viewer.get(home, resolver) is None)
+    check("FREECAD_MCP_VIEWER=0 turns the viewer off", not viewer.enabled())
     del os.environ["FREECAD_MCP_VIEWER"]
+    check("…which is on by default", viewer.enabled())
 except Exception:  # noqa: BLE001
     import traceback
     traceback.print_exc()
@@ -193,17 +145,12 @@ if "--real" in sys.argv:
     os.makedirs(rhome)
     shutil.copytree(os.path.join(ROOT, "examples", "nema17_bracket"), os.path.join(rhome, "nema17_bracket"),
                     ignore=shutil.ignore_patterns(".history", "build", "out", "release", "drawings"))
-    os.environ["FREECAD_MCP_VIEWER_PORT"] = "0"
     c = Client(rhome)
     try:
-        err, txt, _ = c.tool("freecad_status", {})
-        st = json.loads(txt) if not err else {}
-        vurl = st.get("viewer", "")
-        check("freecad_status reports the viewer link", not err and vurl.startswith("http://127.0.0.1:"), txt[:400])
         err, txt, _ = c.tool("build", {"project": "nema17_bracket", "return_image": False})
         check("build ok", not err and "BUILD ✓" in txt, txt[:600])
-        sj = os.path.join(rhome, "nema17_bracket", "build", "viewer", "scene.json")
-        gp = os.path.join(rhome, "nema17_bracket", "build", "viewer", "scene.glb")
+        vdir = os.path.join(rhome, "nema17_bracket", "build", "viewer")
+        sj, gp = os.path.join(vdir, "scene.json"), os.path.join(vdir, "scene.glb")
         scene = json.load(open(sj)) if os.path.isfile(sj) else {}
         check("the build wrote scene.json with its revision, status and checks",
               scene.get("rev") == "r0001" and scene.get("ok") is True and len(scene.get("checks", [])) == 5, scene)
@@ -214,38 +161,46 @@ if "--real" in sys.argv:
         nodes = {n.get("name"): n for n in (gj or {}).get("nodes", [])}
         check("scene.glb is glTF with a meshed node per part", gj is not None
               and all(nodes.get(p["node"], {}).get("mesh") is not None for p in scene.get("parts", [])), nodes)
-        check("the build reply links the viewer once", "viewer   http://127.0.0.1:" in txt, txt[-400:])
-        code, body, _ = get(vurl + "api/scene")
-        check("the running server follows the build", code == 200 and json.loads(body).get("rev") == "r0001",
-              (code, body[:200]))
-        v1 = scene.get("version")
+        pages = glob.glob(os.path.join(vdir, "*.html"))
+        check("…and the viewer page, named after the model", [os.path.basename(p) for p in pages]
+              == ["nema17_bracket.html"], pages)
+        html = open(pages[0]).read() if pages else ""
+        check("the page carries this build and its model", json.loads(inline(html, "fcmcp-scene") or "{}").get("rev")
+              == "r0001" and base64.b64decode(inline(html, "fcmcp-glb") or "") == open(gp, "rb").read())
+        check("the build reply names the page once", "viewer   build/viewer/nema17_bracket.html" in txt, txt[-400:])
+        m1, _ = feed(os.path.join(vdir, "model.js"), "fcmcpModel")
         err, txt, _ = c.tool("build", {"project": "nema17_bracket", "params": {"plate_h": 60},
                                        "return_image": False})
-        scene2 = json.load(open(sj))
-        check("a rebuild writes a new scene version (what the page polls for)", not err and scene2.get("version") != v1
-              and scene2.get("rev") == "r0002" and scene2.get("params", {}).get("plate_h") == 60, scene2.get("rev"))
-        check("…and does not repeat the viewer line", "viewer   http" not in txt, txt[-300:])
+        st2, _ = feed(os.path.join(vdir, "scene.js"), "fcmcpScene")
+        m2, _ = feed(os.path.join(vdir, "model.js"), "fcmcpModel")
+        check("a rebuild writes a new scene.js and model.js (what an open page follows)", not err
+              and st2.get("rev") == "r0002" and st2.get("params", {}).get("plate_h") == 60
+              and m2.get("version") == st2.get("model") != (m1 or {}).get("version"), (st2.get("rev"), m2))
+        check("…and does not repeat the viewer line", "viewer   build" not in txt, txt[-300:])
+        before = open(os.path.join(vdir, "scene.js")).read()
         err, txt, _ = c.tool("build", {"project": "nema17_bracket", "variant": "tall", "params": {"plate_h": 80},
                                        "return_image": False})
-        scene3 = json.load(open(sj))
-        check("a variant build leaves the main scene alone", not err and scene3.get("version") == scene2.get("version"),
-              scene3.get("rev"))
+        check("a variant build leaves the page and its feed alone",
+              not err and open(os.path.join(vdir, "scene.js")).read() == before)
         mp = os.path.join(rhome, "nema17_bracket", "model.py")
         good = open(mp).read()
         with open(mp, "w") as fh:
             fh.write("raise ValueError('broken on purpose')\n" + good)
+        model_js = open(os.path.join(vdir, "model.js")).read()
         err, txt, _ = c.tool("build", {"project": "nema17_bracket", "return_image": False})
-        scene4 = json.load(open(sj))
+        st4, _ = feed(os.path.join(vdir, "scene.js"), "fcmcpScene")
+        html = open(os.path.join(vdir, "nema17_bracket.html")).read()
         check("a build that makes no geometry keeps the last model, says which, and carries the error",
-              scene4.get("ok") is False and scene4.get("glb") == "scene.glb" and scene4.get("glb_rev") == "r0002"
-              and scene4.get("rev") != "r0002" and "broken on purpose" in (scene4.get("script_error") or "")
-              and [p["label"] for p in scene4.get("parts", [])] == [p["label"] for p in scene2.get("parts", [])],
-              {k: scene4.get(k) for k in ("ok", "rev", "glb", "glb_rev", "script_error")})
+              st4.get("ok") is False and st4.get("model") == m2.get("version") and st4.get("glb_rev") == "r0002"
+              and "broken on purpose" in (st4.get("script_error") or "")
+              and open(os.path.join(vdir, "model.js")).read() == model_js and inline(html, "fcmcp-glb"),
+              {k: st4.get(k) for k in ("ok", "rev", "model", "glb_rev", "script_error")})
         with open(mp, "w") as fh:
             fh.write(good)
         err, txt, _ = c.tool("create_project", {"name": "fresh_part"})
-        check("create_project gives the viewer link for the new project",
-              not err and "?project=fresh_part" in txt, txt[-500:])
+        err, txt, _ = c.tool("open_in_gui", {"project": "fresh_part", "viewer": True})
+        check("open_in_gui(viewer=true) before the first build says to build first", err and "build the project" in txt,
+              txt)
     except Exception:  # noqa: BLE001
         import traceback
         traceback.print_exc()

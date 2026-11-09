@@ -2,8 +2,7 @@
 FreeCAD design server. Units mm and degrees; Z up. Code in, evidence out:
 
 1. At the start of a design task, call `guide` once (unless the freecad-design
-   skill is already loaded). Then `freecad_status` (give the user its `viewer`
-   link: a live 3D view that follows every build), and `create_project` or
+   skill is already loaded). Then `freecad_status`, and `create_project` or
    `inspect` the user's file.
 2. Put every driving dimension in params.json with its source. Take hole,
    thread, fastener and fit dimensions from `lookup_standard`, never from
