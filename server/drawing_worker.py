@@ -4110,9 +4110,25 @@ def op_export(args):
 OPS = {"create": op_create, "read": op_read, "edit": op_edit, "sheet_status": op_sheet_status, "export": op_export}
 
 
+# Settings groups FreeCAD creates during a drawing op (logged across the drawing suite). TechDraw
+# reads its settings from the threads that compute views, and FreeCAD's settings tree is not
+# thread-safe: a group created while another thread walks the tree crashes FreeCAD (SIGSEGV or
+# SIGBUS in ParameterGrp::GetGroup). Creating them all before any view computes leaves the threads
+# only reading. A fresh user.cfg is written for every run, so none of these exist at start.
+SETTINGS_GROUPS = ["Mod/TechDraw/" + g for g in (
+    "Colors", "Decorations", "Dimensions", "Files", "General", "HLR", "Labels", "PAT", "Rez",
+    "Standards", "View", "debug", "dimensioning")] + [
+    "Mod/Arch", "Mod/Draft", "Mod/Material/ExternalInterface", "Mod/Material/Resources/Modules",
+    "Mod/Measure/Appearance", "Mod/PartDesign/Preview", "Mod/Sketcher/General/GridSize",
+    "Mod/Spreadsheet", "NaviCube", "View/LightSources"]
+
+
 def set_preferences():
-    """TechDraw settings for this private config: ISO referencing dimensions
-    (horizontal text), no units on dimensions, 3.5 mm text."""
+    """Create the settings groups (see SETTINGS_GROUPS), then TechDraw settings for
+    this private config: ISO referencing dimensions (horizontal text), no units on
+    dimensions, 3.5 mm text."""
+    for group in SETTINGS_GROUPS:
+        App.ParamGet("User parameter:BaseApp/Preferences/" + group)
     dims = App.ParamGet("User parameter:BaseApp/Preferences/Mod/TechDraw/Dimensions")
     dims.SetInt("StandardAndStyle", 1)
     dims.SetBool("ShowUnits", False)
