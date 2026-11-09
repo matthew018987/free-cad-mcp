@@ -148,12 +148,12 @@ template, and the names of its DFM, cost and `simulate` handlers.
   diff colours).
 
 ### F5. External programs and an evidence cache (S)
-- `server/externals.py` (stdlib) finds PrusaSlicer, OrcaSlicer (a fork of
-  Bambu Studio, whose CLI is close to Orca's) and git: an environment
-  variable first (`FREECAD_MCP_SLICER`, `FREECAD_MCP_GIT`), then the macOS app
-  bundles (`/Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer`,
-  `/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`), then `PATH`, each
-  with a version probe. `freecad_status` reports them with a `setup_hint`.
+- `server/externals.py` (stdlib) finds OrcaSlicer, PrusaSlicer and git (and
+  Bambu Studio, whose CLI is close to Orca's: Orca is a fork of it): an
+  environment variable first (`FREECAD_MCP_SLICER`, `FREECAD_MCP_GIT`), then
+  the macOS app bundles (`/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer`,
+  `/Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer`), then `PATH`,
+  each with a version probe. `freecad_status` reports them with a `setup_hint`.
   `/usr/bin/git` on macOS is an Xcode shim that fails until the Xcode licence
   is accepted, the trap design.md §2.3 found with `/usr/bin/python3`, so git is
   probed, never assumed.
@@ -189,6 +189,28 @@ cam(Bracket).uncut_mm3 | .cycle_min
 **Goal.** Replace "≤ 45° overhangs" with the slicer's own answer: real print
 time, filament and support material, and the features it can't print.
 
+**Which slicer.** Compared on licence, support and developer activity (GitHub
+search API, 9 Nov 2026; commits on the default branch):
+
+| Slicer | Licence | Backed by | Stars | Commits, 12 months | Merged PRs, 12 months | CLI |
+|---|---|---|---|---|---|---|
+| OrcaSlicer | AGPL-3.0 | its community | 16.4k | ~5,000 | ~2,300 | documented in its wiki; flags move between releases |
+| PrusaSlicer | AGPL-3.0 | Prusa Research | 9.5k | ~1,700 | none on GitHub (in-house team) | stable for years; FDM and SLA |
+| Bambu Studio | AGPL-3.0 | Bambu Lab | 5.3k | ~4,200 | not measured | close to Orca's; centred on Bambu printers; 8.3k open issues |
+| UltiMaker Cura | LGPL-3.0 (engine AGPL-3.0) | UltiMaker | 7.1k | ~1,200 (engine ~960) | not measured | the engine needs fully resolved machine definitions: the hardest to drive |
+
+- **Licence** doesn't separate them. The server runs the user's own installed
+  slicer, unmodified, as a separate program, which puts no AGPL obligations on
+  the Apache-2.0 server. The plugin must not bundle a slicer binary or copy a
+  slicer's profile files.
+- **OrcaSlicer first**: by far the largest and most active developer
+  community (about three times PrusaSlicer's commits, and the only one merging
+  outside contributions at scale) and very wide printer coverage. The
+  trade-off is no company behind it and a CLI that moves, handled by version
+  pinning.
+- **PrusaSlicer second**: company-backed, the most stable CLI, and the one that
+  slices SLA. Bambu Studio comes nearly free after Orca; Cura is not planned.
+
 **Surface.**
 - `check_manufacturing(simulate=true)` slices each fdm part (and sla, where
   the slicer handles it) in its print orientation: `parts.<Part>.print_up`,
@@ -197,11 +219,12 @@ time, filament and support material, and the features it can't print.
   `print_up` from that evidence; `release` re-slices when the orientation it
   ships has no current evidence, so the README's numbers always describe the
   shipped file.
-- `project.json → printer`: `{"slicer": "prusaslicer" | "orca", "profile":
+- `project.json → printer`: `{"slicer": "orca" | "prusaslicer", "profile":
   {"printer": …, "print": …, "filament": …}, "volume": […]}`. Profile names
   resolve in the user's slicer configuration folder, or to files in
   `refs/slicer/`. The plugin ships generic profiles (0.4 mm nozzle, 0.2 mm
-  layers; PLA, PETG, ASA) so slicing works with no setup.
+  layers; PLA, PETG, ASA) so slicing works with no setup, written for this
+  project rather than copied from a slicer.
 - Checks: `print_time` (max minutes), `filament` (max g), `support` (max g, or
   max % of the part), `print_coverage` (min % of the model's cross-section that
   the slicer extrudes).
@@ -212,16 +235,19 @@ time, filament and support material, and the features it can't print.
 **How it works.**
 1. Worker: export the part oriented exactly as the release would
    (`_orient_mesh`).
-2. Server: run the slicer as a cancellable child (F5).
-   - PrusaSlicer: `--export-gcode --load <printer.ini> --load <print.ini>
-     --load <filament.ini> --output <file> <part.stl>`, with supports switched
-     on where the profile leaves them off, so "needs supports" is measured
-     rather than assumed.
-   - OrcaSlicer: `--load-settings "printer.json;process.json" --load-filaments
-     filament.json --slice 0 --export-3mf out.3mf`, reading the G-code inside
-     the 3MF. Flags have moved between Orca versions (`--load-filaments` against
-     `--load-filament`, for one), so the driver reads `--help` and keeps an
-     argument builder per version range.
+2. Server: run the slicer as a cancellable child (F5), with supports switched
+   on where the profile leaves them off, so "needs supports" is measured
+   rather than assumed.
+   - OrcaSlicer (first): `--load-settings "printer.json;process.json"
+     --load-filaments filament.json --slice 0 --export-3mf out.3mf`, reading
+     the G-code inside the 3MF. Flags have moved between Orca versions
+     (`--load-filaments` against `--load-filament`, for one), so the driver
+     reads `--help`, keeps an argument builder per version range, and
+     `freecad_status` names the versions the tests cover. User presets inherit
+     from Orca's system presets, so the driver resolves the `inherits` chain;
+     where Orca keeps both on macOS is the first thing to confirm.
+   - PrusaSlicer (second): `--export-gcode --load <printer.ini> --load
+     <print.ini> --load <filament.ini> --output <file> <part.stl>`.
 3. Server: parse the G-code (plain text, stdlib). Totals from the header and
    footer comments: time, filament length, volume and mass. Extrusion per
    feature type from the feature markers (`;TYPE:` in PrusaSlicer,
@@ -238,7 +264,7 @@ time, filament and support material, and the features it can't print.
 **Example.**
 ```
 ✓ Bracket - fdm: ready
-    · sliced with PrusaSlicer 2.8.1, "Generic PETG 0.4 / 0.20mm", print_up +Z
+    · sliced with OrcaSlicer 2.x, "Generic PETG 0.4 / 0.20mm", print_up +Z
     · 1 h 42 min · 31.4 g PETG · supports 2.1 g (7 %) under the arm, from z 18
     · orientations: +Z 1 h 42 min, 2.1 g support · -X 1 h 55 min, no support · +Y 2 h 10 min, 4.0 g
     ⚠ the 0.3 mm fin at x 12, z 12-30 is not extruded (narrower than one 0.45 mm line):
@@ -254,15 +280,17 @@ one orientation, none when flipped), and a 0.3 mm fin that coverage reports
 while a 1.2 mm wall passes.
 
 **Risks.** Profiles are the main friction (Orca wants fully resolved JSON,
-PrusaSlicer ini files): ship generic ones and read the user's. Slicing takes
-seconds per part and orientation: cache by `geom_sig` and profile hash. SLA:
-only PrusaSlicer's SLA mode has a usable CLI, so other SLA work keeps the
-geometry estimates.
+PrusaSlicer ini files): ship generic ones and read the user's. Orca's CLI
+changes between releases: pin and test a version range, and outside it fail
+with a message that names the tested versions. Slicing takes seconds per part
+and orientation: cache by `geom_sig` and profile hash. SLA: Orca slices FDM
+only, so SLA evidence arrives with the PrusaSlicer driver; until then SLA
+keeps the geometry estimates.
 
 ### 1.2 Cost and lead-time estimate
 
 **Goal.** The playbook tells Claude to raise anything that affects cost, but
-nothing computes it. With an estimate, "CNC €48 vs FDM €6 at qty 4" comes from
+nothing computes it. With an estimate, "CNC $48 vs FDM $6 at qty 4" comes from
 numbers, with the rates in view.
 
 **Surface.** A new tool:
@@ -282,18 +310,19 @@ estimate(project, parts?, processes?: ["fdm", "cnc"], qty?: [1, 10, 100], rates?
 
 | Process | Material | Time | Setup and other |
 |---|---|---|---|
-| fdm | filament g (slicer; else volume × shell and infill factor) × €/kg | print h (slicer; else a volumetric rate) × €/h; support removal by support g | per order; parts per plate from the bed area |
-| sla | resin with supports × €/L | layers × layer time, shared by the parts on a plate | wash and cure per batch |
-| cnc | stock: bbox + allowance, up to standard plate or bar × €/kg | roughing: removed volume ÷ MRR(material, tool Ø from the smallest corner radius); finishing: feature area ÷ rate; holes × per-hole time, more when tapped; toolpath time once 1.4 exists | setups (from `machining_access`) × setup time; CAM programming NRE; finish per area with a batch minimum |
-| turning | bar (`bar_for`, cut length L + 3) × €/kg | removed volume ÷ MRR, plus facing, parting and threads | a secondary setup for cross holes |
-| laser | sheet area (profile bbox × nesting factor) × €/m² by material and thickness | cut length ÷ speed(material, t) + pierces × pierce time | per-order minimum |
+| fdm | filament g (slicer; else volume × shell and infill factor) × $/kg | print h (slicer; else a volumetric rate) × $/h; support removal by support g | per order; parts per plate from the bed area |
+| sla | resin with supports × $/L | layers × layer time, shared by the parts on a plate | wash and cure per batch |
+| cnc | stock: bbox + allowance, up to standard plate or bar × $/kg | roughing: removed volume ÷ MRR(material, tool Ø from the smallest corner radius); finishing: feature area ÷ rate; holes × per-hole time, more when tapped; toolpath time once 1.4 exists | setups (from `machining_access`) × setup time; CAM programming NRE; finish per area with a batch minimum |
+| turning | bar (`bar_for`, cut length L + 3) × $/kg | removed volume ÷ MRR, plus facing, parting and threads | a secondary setup for cross holes |
+| laser | sheet area (profile bbox × nesting factor) × $/m² by material and thickness | cut length ÷ speed(material, t) + pierces × pierce time | per-order minimum |
 | sheet | the laser blank above | bends × per-bend time | press-brake setup per distinct bend set |
-| moulding, casting | shot or pour weight with runners × €/kg | cycle time (cooling from the thickest wall) × machine rate for the clamp-force class | tooling NRE from envelope, cavities, side actions and finish class |
+| moulding, casting | shot or pour weight with runners × $/kg | cycle time (cooling from the thickest wall) × machine rate for the clamp-force class | tooling NRE from envelope, cavities, side actions and finish class |
 
-**Rates.** `server/costing.py` ships a default table in EUR labelled "typical
-small-batch online-service rates, 2026: replace with your supplier's". Users
-override it in `~/CAD/rates.json` (named suppliers) and per project in
-`project.json → costing`. Calibration: `costing.quotes` holds real quotes
+**Rates.** `server/costing.py` ships a default table in USD labelled "typical
+US small-batch online-service rates, 2026: replace with your supplier's".
+Users override it in `~/CAD/rates.json` (named suppliers) and per project in
+`project.json → costing`. Users elsewhere supply a table in their own
+currency: shop rates differ by region, not just by exchange rate. Calibration: `costing.quotes` holds real quotes
 (part, process, qty, unit price, supplier, date); the estimate prints its ratio
 to them and can scale that process ("calibrated ×1.3 against 2 quotes").
 **Lead time** = queue days + machine hours ÷ capacity + finishing days +
@@ -301,10 +330,10 @@ shipping, per supplier, as a range.
 
 **Example.**
 ```
-ESTIMATE bracket r0042  (EUR, default rates: estimates, not quotes)
+ESTIMATE bracket r0042  (USD, default rates: estimates, not quotes)
 part     process  qty 1             qty 10    qty 100   lead time   basis
-Bracket  fdm      €9.80             €6.10/u   €4.90/u   2-4 days    slicer: 1 h 42 min, 31 g
-Bracket  cnc      €118 (€70 NRE)    €48/u     €29/u     7-12 days   2 setups, 41 cm³ removed, R3 → Ø6 tool
+Bracket  fdm      $9.80             $6.10/u   $4.90/u   2-4 days    slicer: 1 h 42 min, 31 g
+Bracket  cnc      $118 ($70 NRE)    $48/u     $29/u     7-12 days   2 setups, 41 cm³ removed, R3 → Ø6 tool
 drivers  cnc: setups 38 % · roughing 31 % · stock 12 %    fdm: machine time 64 % · material 21 %
 ```
 
@@ -441,9 +470,28 @@ with their sources, and an eval case.
 - Tests: a 1 m square SHS frame with mitred corners (four 1000 mm members with
   45° ends, nested in one 6 m bar), a coped T-joint, the vent-hole warning.
 
-**Order.** Moulding first (the biggest gap: there is no formative process yet,
-and it reuses the ray tests), casting while the pull engine is fresh, then
-profile frames (cheap, and they share the 2.5 library), then weldments.
+**Candidates, for prioritising.** The four above, plus others common at
+online services. Pairs that share an engine are cheaper built together:
+moulding then casting, profile frames then weldments, weldments with tube
+bending.
+
+| # | Process | What it adds | Reuses | Size |
+|---|---|---|---|---|
+| 1 | Injection moulding | draft, wall uniformity, parting line, undercuts and side actions, clamp force, cycle time, tooling cost | ray tests, wall thickness | L |
+| 2 | Casting (sand, investment, die) | 1 plus cores, hot spots, machining allowance, as-cast and machined models | 1's pull engine | M |
+| 3 | Extrusion-profile frames | T-slot members, brackets and T-nuts, cut list with end taps, deflection | the 2.5 library, bonded FEA | M |
+| 4 | Welded frames | mitres and copes, cut list nested into stock bars, fit-up, weld access, weld symbols | 3's members and cut list | L |
+| 5 | SLS / MJF nylon printing | no supports; trapped powder (enclosed voids need escape holes), minimum wall and gap, warping of large flats; cost by packed volume | the print checks | S |
+| 6 | Metal printing (DMLS / SLM) | supports and their removal, residual stress on large flats, machining allowance on functional faces | the print checks, 2's allowance | M |
+| 7 | Urethane (vacuum) casting | 10-50 parts from a silicone mould: wall and rib rules, tolerances, master and mould cost | 1's wall checks | S |
+| 8 | Vacuum forming | draft, draw ratio, corner webbing, sheet thinning, mould cost | 1's draft map | M |
+| 9 | Tube bending | bend radius against OD, straight length between bends, a bend table for the bender | 4's members | M |
+| 10 | Wire EDM | through profiles in thick or hard plate, near-sharp internal corners, start holes | the laser plate profile and DXF | S |
+| 11 | Sheet-metal gaps (not a new process) | hems, rounded outlines, automatic corner reliefs: the limits design.md lists today | `fc.sheet_metal` | S-M |
+| 12 | 3+2-axis CNC | indexed setups for the faces today's check says need 4/5-axis | the 1.4 CAM preview | M |
+
+**Order.** Awaiting the owner's ranking of this list; M8 and M9 hold 1-4 until
+then.
 
 ### 1.4 CAM toolpath preview (FreeCAD's CAM workbench)
 
@@ -688,12 +736,19 @@ the drawings, and a git commit and tag per release. The build counter rNNNN
 stays as the work-in-progress number underneath.
 
 **Surface.**
-- `release(revision="next" | "B", change_note="…")`. A part's first release is
-  A; letters follow ASME Y14.35 and skip I, O, Q, S, X and Z, and
-  `project.json → revision.scheme: "numbers"` gives 01, 02 … instead.
-- Revisions are per part, because each drawing carries its own: a release in
-  which only the Plate changed moves the Plate to B and leaves the Bracket at
-  A. A one-part project reads as one letter.
+- `release(revision="next" | "B", change_note="…")`. Letters follow ASME
+  Y14.35: they skip I, O, Q, S, X and Z, and after Y come AA, AB …. Companies
+  differ on the first release (A, or a dash with A as the first change), so
+  `project.json → revision.first` sets it (default A); `revision.scheme:
+  "numbers"` gives 01, 02 … instead.
+- Revisions are per part, which is the industry norm: a revision belongs to the
+  drawing that defines the part (ASME Y14.35; the ISO 7200 title block has one
+  revision field per document), and PLM systems keep one revision per item with
+  iterations inside it (Windchill's A.1, A.2), which is how the build revisions
+  rNNNN relate to letters here. A release in which only the Plate changed moves
+  the Plate to B and leaves the Bracket at A; an assembly has its own letter,
+  changed when its own drawing or BOM changes. A one-part project reads as one
+  letter.
 - The same inputs as the released revision re-issue the same letter (today's
   `release_target` logic). Changed inputs without a note stop the release with
   a **drafted note**, which Claude confirms with the user and passes back.
@@ -784,11 +839,16 @@ reference_part(project, name, source={"file": "refs/motor.step"} | {"spec": "ref
 - Returns the measured interface table, the proposed frames drawn on a render
   (F4) and a model.py snippet, and writes `refs/<name>.part.json` with the
   frames, source and BOM role.
-- `url`: only when the user asked for that part, from a URL they gave or
-  approved, with the source (URL, date, sha1, licence note) saved in
-  `refs/<name>.source.json`. Vendor CAD sites often need a login and have terms
-  of use, so the default stays as it is now: the user, or Claude's own web
-  tools, fetch the file and `write_file(encoding="base64")` copies it in.
+- `url`: the server downloads the file itself (a datasheet PDF, a STEP, or a
+  zip of them) into `refs/`, from a link the user gave or one Claude found for
+  the part, and saves the source (URL, date, sha1, size, licence or terms note)
+  in `refs/<name>.source.json`. Guards: HTTPS only; a size cap (200 MB); an
+  allow-list of file types (STEP, IGES, STL, OBJ, 3MF, PDF, PNG, JPG, ZIP);
+  zips unpacked with path checks; and the file is parsed in a worker, as every
+  model file is. Whether FreeCAD's bundled Python finds a CA bundle for HTTPS
+  is checked by `freecad_status`, and a failure names the fix. Pages behind a
+  login stay with the user: they download the file and
+  `write_file(encoding="base64")` copies it in, as now.
 
 **(c) A library.** `server/partlib/*.part.json` ships specs for common
 bought-out parts, every number with its source, and vendor-specific ones
@@ -812,7 +872,9 @@ other files that model.py reads already do. `server/partlib/` is copied by
 a Ø22 pilot and a Ø5 shaft, and its auto checks pass. A spec whose PCD
 contradicts its hole spacing is refused. An inch STEP is flagged. Frames
 proposed on a generated vendor-like STEP (a box with four holes and a boss)
-land on the right face. `nema17_print` and `two_part_assembly` rerun with the
+land on the right face. Downloads from a local test server: the size cap, the
+type allow-list, a zip with `../` paths refused, provenance written.
+`nema17_print` and `two_part_assembly` rerun with the
 library: the same graders, fewer tool calls. New eval `datasheet_intake`: two
 datasheets and one plate holding both parts, graded on frames and interface
 checks.
@@ -864,16 +926,16 @@ F4 renderer ──────────────► 2.2, 2.3, 1.3a draft m
 
 ---
 
-## 7. Decisions (open)
+## 7. Decisions
 
-| Question | Recommendation | Affects |
+| Question | Decision | Affects |
 |---|---|---|
-| Currency and rate region of the default cost table | EUR, a user rates file, and calibration from real quotes from the start | 1.2 |
-| Which slicer first | PrusaSlicer (stable CLI, plain-text G-code), then OrcaSlicer and Bambu Studio | 1.1 |
-| Order of the new processes | moulding, casting, profile frames, weldments | 1.3, M8-M9 |
-| Revision scheme | letters per part; git opt-in per project | 2.4 |
-| May the server download vendor files itself? | Not at first: files the user or Claude supply; per-URL downloads later, each confirmed | 2.5 |
-| CAM output | a labelled preview G-code export; never in a release by default | 1.4 |
+| Currency of the default cost table | **USD** (decided 2026-11-09), with a user rates file and calibration from real quotes | 1.2 |
+| Which slicer first | **OrcaSlicer, then PrusaSlicer**: recommended on licence, support and developer activity (§1.1), to confirm | 1.1 |
+| Order of the new processes | **open**: rank the candidate list in §1.3 | 1.3, M8-M9 |
+| Revision scheme | **letters per part** (decided 2026-11-09; the industry norm, §2.4). Open: first release A or a dash (default A); git opt-in per project (recommended) | 2.4 |
+| May the server download vendor files itself? | **yes** (decided 2026-11-09), with the guards in §2.5 | 2.5 |
+| CAM output | **open**: recommended a labelled preview G-code export, never in a release by default | 1.4 |
 
 ## 8. Not planned
 
@@ -889,3 +951,8 @@ F4 renderer ──────────────► 2.2, 2.3, 1.3a draft m
 - OrcaSlicer CLI: <https://www.orcaslicer.com/wiki/cli/cli_mode>
 - Headless FreeCAD (workbench modules in console mode):
   <https://wiki.freecad.org/Headless_FreeCAD>
+- Slicer licences and activity: the GitHub search API, 2026-11-09
+  (`prusa3d/PrusaSlicer`, `OrcaSlicer/OrcaSlicer`, `bambulab/BambuStudio`,
+  `Ultimaker/Cura`, `Ultimaker/CuraEngine`)
+- ASME Y14.35 revision letters, as summarised in:
+  <https://ndia.dtic.mil/wp-content/uploads/2008/technical/GastonEngineeringDrawingsY14_35.pdf>
