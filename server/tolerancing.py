@@ -116,7 +116,7 @@ TYPICAL = {
     "parallelism": "0.02 to 0.05",
     "perpendicularity": "0.02 to 0.05 (a bore to its face: ⌀0.02 in one setup)",
     "angularity": "0.05 to 0.1",
-    "position": "⌀0.05 to ⌀0.2; bolt patterns from the fastener rule (lookup_standard fastener='M5')",
+    "position": "⌀0.05 to ⌀0.2; bolt patterns from the bolted-joint rule (lookup_standard joint='M5')",
     "coaxiality": "⌀0.02 to ⌀0.05 machined in one setup; ⌀0.01 ground",
     "symmetry": "0.05 to 0.1 (keyways, slots)",
     "circular_runout": "0.01 to 0.03 turned; 0.005 ground",
@@ -538,14 +538,14 @@ def check_entry(e, feature, datums=None, part="the part"):
     if size and kind in FOS and e["tol"] >= float(size):
         out.append(_finding("warn", "tol-size", "a %s zone of %s on a %s of %s is larger than the feature: check the "
                             "value" % (t, _g(e["tol"]), _kind_words(kind)[2:], _g(size))))
-    fast = (feature or {}).get("fastener")
-    if t == "position" and e.get("material") == "M" and isinstance(fast, dict) and fast.get("size"):
+    screw = (feature or {}).get("screw")
+    if t == "position" and e.get("material") == "M" and isinstance(screw, dict) and screw.get("size"):
         try:
-            r = fastener(fast["size"], fast.get("clearance") or "normal")
+            r = joint(screw["size"], screw.get("clearance") or "normal")
         except (ValueError, KeyError):
             r = None
         if r and e["tol"] > r["T"] + 1e-9:
-            out.append(_finding("warn", "fastener", "⌀%s Ⓜ is more than a floating %s screw allows in %s %s "
+            out.append(_finding("warn", "joint", "⌀%s Ⓜ is more than a floating %s screw allows in %s %s "
                                 "clearance holes (⌀%s = %s − %s): the screws may not go in" % (
                                     _g(e["tol"]), r["size"], "⌀" + _g(r["hole"]), r["clearance"], _g(r["T"]),
                                     _g(r["hole_min"]), _g(r["screw"]))))
@@ -1326,10 +1326,11 @@ _CLEAR = {"fine": "fine", "close": "fine", "normal": "normal", "medium": "normal
           "loose": "coarse"}
 
 
-def fastener(size, clearance="normal", screw_d=None):
-    """Position tolerance for bolted holes at MMC: H = the smallest ISO 273 clearance hole (H12 / H13 / H14,
-    so the nominal), F = the largest screw (its nominal major Ø, conservative, unless screw_d is given).
-    T = H − F: each part's zone with a floating fastener, the two parts' zones together with a fixed one."""
+def joint(size, clearance="normal", screw_d=None):
+    """The bolted-joint rule, position tolerance for bolted holes at MMC: H = the smallest ISO 273 clearance
+    hole (H12 / H13 / H14, so the nominal), F = the largest screw (its nominal major Ø, conservative, unless
+    screw_d is given). T = H − F: each part's zone with a floating fastener, the two parts' zones together
+    with a fixed one."""
     s = standards.norm_size(size)
     key = _CLEAR.get(str(clearance or "normal").strip().lower())
     if not key:
@@ -1349,9 +1350,9 @@ def equivalent_position(tx, ty=None):
     return 2.0 * math.hypot(tx, ty)
 
 
-def fastener_check(t_a, t_b, size, clearance="normal", mount="floating", screw_d=None):
+def joint_check(t_a, t_b, size, clearance="normal", mount="floating", screw_d=None):
     """(ok, value text, detail) for two mating hole patterns with position zones t_a and t_b (⌀ mm at MMC)."""
-    r = fastener(size, clearance, screw_d)
+    r = joint(size, clearance, screw_d)
     if mount not in ("floating", "fixed"):
         raise ToleranceError("mount is floating (clearance holes in both parts) or fixed (one part tapped or "
                              "pressed)")
@@ -1366,8 +1367,8 @@ def fastener_check(t_a, t_b, size, clearance="normal", mount="floating", screw_d
         "fixed %s: T₁ + T₂ = %s − %s (use Ⓟ on the tapped holes)" % (r["size"], _g(r["hole_min"]), _g(r["screw"]))
 
 
-def fastener_report(size, clearance="normal", mount=None, screw_d=None):
-    r = fastener(size, clearance, screw_d)
+def joint_report(size, clearance="normal", mount=None, screw_d=None):
+    r = joint(size, clearance, screw_d)
     lines = ["%s screw in %s clearance holes Ø%s %s (%s … %s, ISO 273)" % (
                  r["size"], r["clearance"], _g(r["hole"]), r["hole_class"], _g(r["hole_min"], 3), _g(r["hole_max"], 3)),
              "  F = Ø%s (the screw's nominal major Ø%s) · H = Ø%s (the smallest hole) · T = H − F = %s" % (
@@ -1421,7 +1422,7 @@ def gdt_card(name=None):
              "  typical      %s (rule)" % TYPICAL[t]]
     if t == "position":
         lines.append("  basic dimensions (framed) locate the feature from the datums; bolted joints: lookup_standard "
-                     "fastener='M5' gives the zone")
+                     "joint='M5' gives the zone")
     if t == "angularity":
         lines.append("  give the basic angle: \"angle\": 30")
     return "\n".join(lines)

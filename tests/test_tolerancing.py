@@ -187,8 +187,8 @@ cases = [
     ("zone", {"id": "x", "type": "position", "feature": "P.face(+Z)", "tol": 0.2, "datums": "A", "zone": "dia"},
      PL),
     ("tol-size", {"id": "x", "type": "position", "feature": "P.holes(d=5.5)", "tol": 6, "datums": "A"}, H),
-    ("fastener", {"id": "x", "type": "position", "feature": "P.holes(d=5.5)", "tol": 0.6, "material": "M",
-                  "datums": "A B"}, dict(H, fastener={"size": "M5", "clearance": "normal"})),
+    ("joint", {"id": "x", "type": "position", "feature": "P.holes(d=5.5)", "tol": 0.6, "material": "M",
+                  "datums": "A B"}, dict(H, screw={"size": "M5", "clearance": "normal"})),
     ("class-case", {"id": "x", "type": "size", "feature": "P.bosses(d=12)", "class": "H7"}, BO),
     ("class-case", {"id": "x", "type": "size", "feature": "P.holes(d=8)", "class": "h7"}, H),
     ("class-case", {"id": "x", "type": "size", "feature": "P.slot", "class": "h9"}, {"kind": "width",
@@ -201,7 +201,7 @@ check("each rule fires on its case (%d cases, %d rules)" % (len(cases), len(set(
       not missing, missing)
 check("…and stays quiet on correct entries: position ⌀0.5 Ⓜ on M5 clearance holes, ⟂ of the bore to A, an h9 tab",
       not found({"id": "x", "type": "position", "feature": "P.holes(d=5.5)", "tol": 0.5, "material": "M",
-                 "datums": "A B"}, dict(H, fastener={"size": "M5", "clearance": "normal"}))
+                 "datums": "A B"}, dict(H, screw={"size": "M5", "clearance": "normal"}))
       and not found({"id": "x", "type": "perpendicularity", "feature": "P.holes(d=22)", "tol": 0.02, "datums": "A"},
                     {"kind": "hole", "ref": "P.holes(d=22)", "size": 22})
       and not found({"id": "x", "type": "size", "feature": "P.tab", "class": "h9"}, {"kind": "width",
@@ -252,7 +252,7 @@ cover = [N(x) for x in [
     {"id": "m5-clear", "type": "position", "feature": "Cover.holes(d=5.5)", "tol": 0.25, "material": "M",
      "datums": "A"}]]
 cf = {"A-flat": PL, "spigot": {}, "m5-clear": {"kind": "hole", "size": 5.5,
-                                               "fastener": {"size": "M5", "clearance": "normal"}}}
+                                               "screw": {"size": "M5", "clearance": "normal"}}}
 cd = {"A": {"kind": "plane", "ref": "Cover.face(-Z, contains=[25, 0, 0])"}}
 rh, rc = T.check_scheme(housing, hf, hd, "Housing"), T.check_scheme(cover, cf, cd, "Cover")
 check("the plan's Housing and Cover schemes have no findings (Cover.datum(A) stands for datum A's face)",
@@ -422,24 +422,24 @@ check("links: a sign of ±1, ordered deviations", "sign" in err_of(L, "x", 1, 0,
 
 # ------------------------------------------------------------------------------------------- bolted joints
 print("bolted joints")
-f5 = T.fastener("M5")
+f5 = T.joint("M5")
 check("M5 normal: Ø5.5 H13 (5.5 … 5.68), screw Ø5, T = ⌀0.5",
       (f5["hole"], f5["hole_class"], f5["hole_min"], f5["hole_max"], f5["screw"], f5["T"]) ==
       (5.5, "H13", 5.5, 5.68, 5.0, 0.5), f5)
 check("…M8 fine Ø8.4 H12 → ⌀0.4; M3 coarse Ø3.6 H14 → ⌀0.6; a given screw Ø4.976 → ⌀0.524",
-      T.fastener("M8", "fine")["T"] == 0.4 and T.fastener("M3", "coarse")["T"] == 0.6
-      and T.fastener("M5", screw_d=4.976)["T"] == 0.524)
-FC = T.fastener_check
+      T.joint("M8", "fine")["T"] == 0.4 and T.joint("M3", "coarse")["T"] == 0.6
+      and T.joint("M5", screw_d=4.976)["T"] == 0.524)
+FC = T.joint_check
 check("floating: ⌀0.5 each ✓, ⌀0.6 ✗; fixed: ⌀0.25 + ⌀0.25 ✓, ⌀0.3 + ⌀0.25 ✗",
       FC(0.5, 0.5, "M5")[0] and not FC(0.5, 0.6, "M5")[0] and FC(0.25, 0.25, "M5", mount="fixed")[0]
       and not FC(0.3, 0.25, "M5", mount="fixed")[0])
 check("±0.2 on x and y is a ⌀0.566 position zone", close(T.equivalent_position(0.2), 0.565685, 1e-6))
-rep = T.fastener_report("M5", mount="fixed")
-check("fastener report: hole, screw, T, the fixed split with Ⓟ, the checks.json line for the same mount",
+rep = T.joint_report("M5", mount="fixed")
+check("joint report: hole, screw, T, the fixed split with Ⓟ, the checks.json line for the same mount",
       "Ø5.5 H13 (5.5 … 5.68" in rep and "T = H − F = 0.5" in rep and "⌀0.25 Ⓟ" in rep and "floating (" not in rep
       and "\"mount\": \"fixed\"" in rep, rep)
-check("…bad clearance series and sizes are errors", "fine, normal or coarse" in err_of(T.fastener, "M5", "tight")
-      and "unknown metric size" in err_of(T.fastener, "M7"))
+check("…bad clearance series and sizes are errors", "fine, normal or coarse" in err_of(T.joint, "M5", "tight")
+      and "unknown metric size" in err_of(T.joint, "M7"))
 
 # ------------------------------------------------------------------------------------------- inspection
 print("inspection list and balloons")
@@ -485,11 +485,11 @@ try:
         return c.tool("lookup_standard", a)
     e1, t1, _ = look(gdt="position")
     e2, t2, _ = look(gdt="all")
-    check("gdt='position' and gdt='all'", not e1 and "⌖ position (ISO 1101, location)" in t1 and "fastener='M5'" in t1
+    check("gdt='position' and gdt='all'", not e1 and "⌖ position (ISO 1101, location)" in t1 and "joint='M5'" in t1
           and not e2 and "⏥ flatness" in t2 and "Ⓟ projected zone" in t2, t1 + t2)
-    e3, t3, _ = look(fastener="M5", mount="floating")
-    e4, t4, _ = look(fastener="M6", clearance="fine", mount="fixed")
-    check("fastener='M5' floating; M6 fine fixed (Ø6.4 H12, ⌀0.4 shared)",
+    e3, t3, _ = look(joint="M5", mount="floating")
+    e4, t4, _ = look(joint="M6", clearance="fine", mount="fixed")
+    check("joint='M5' floating; M6 fine fixed (Ø6.4 H12, ⌀0.4 shared)",
           not e3 and "⌖ ⌀0.5 Ⓜ on each part's pattern" in t3 and not e4 and "Ø6.4 H12" in t4 and "share ⌀0.4" in t4,
           t3 + t4)
     e5, t5, _ = look(surface="Ra 0.8")
@@ -500,15 +500,15 @@ try:
     check("tolerance='ISO 2768-mK' with d: linear and geometric", not e7 and "40 mm → ±0.3 mm" in t7
           and "40 mm → flatness 0.2 · perpendicularity 0.4" in t7, t7)
     e8, t8, _ = look(gdt="flatnes")
-    e9, t9, _ = look(fastener="M5", mount="sideways")
+    e9, t9, _ = look(joint="M5", mount="sideways")
     e10, t10, _ = look(surface="Ra x")
     check("errors: a typo suggests the name, a bad mount and a bad surface are refused",
           e8 and "did you mean 'flatness'" in t8 and e9 and "mount" in t9 and e10 and "Ra 1.6" in t10, [t8, t9, t10])
     e11, t11, _ = look()
     props = [t for t in c.rpc("tools/list")["result"]["tools"] if t["name"] == "lookup_standard"][0]["inputSchema"]
-    check("no arguments lists the new keys; the schema has gdt, fastener, clearance, mount, surface",
-          "gdt='position'" in t11 and "fastener='M5'" in t11 and "surface='Ra 0.8'" in t11
-          and {"gdt", "fastener", "clearance", "mount", "surface"} <= set(props["properties"]), t11)
+    check("no arguments lists the new keys; the schema has gdt, joint, clearance, mount, surface",
+          "gdt='position'" in t11 and "joint='M5'" in t11 and "surface='Ra 0.8'" in t11
+          and {"gdt", "joint", "clearance", "mount", "surface"} <= set(props["properties"]), t11)
     c.close()
 finally:
     shutil.rmtree(home, ignore_errors=True)

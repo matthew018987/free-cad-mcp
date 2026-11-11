@@ -573,7 +573,7 @@ workflow never depends on path mapping.
 | `tests/test_packaging.py` | Plugin build, packaged server, reload helper, eval harness with known-good/bad solutions (49) |
 | `tests/test_sheet_metal.py` | Bent sheet metal: folding, flat pattern maths, DFM, flat-pattern DXF, eval case solutions |
 | `tests/test_analysis.py` … `test_evals_plugin.py` | Hardening suites per area: analysis (123), drawings (115), manufacture/standards (116), worker/fclib (110), server (245), reload addon (46), evals/plugin (66) |
-| `server/tolerancing.py`, `tests/test_tolerancing.py` | M6.1 tolerancing core (stdlib, tested without FreeCAD): requirement parsing and the scheme rules, feature control frame / datum / surface texture SVGs, stack-ups (worst case, RSS, Monte Carlo, contributions, IT allocation), the bolted-joint rule, inspection rows and stable balloon numbers; `lookup_standard` gdt / fastener / surface (77 checks) |
+| `server/tolerancing.py`, `tests/test_tolerancing.py` | M6.1 tolerancing core (stdlib, tested without FreeCAD): requirement parsing and the scheme rules, feature control frame / datum / surface texture SVGs, stack-ups (worst case, RSS, Monte Carlo, contributions, IT allocation), the bolted-joint rule, inspection rows and stable balloon numbers; `lookup_standard` gdt / joint / surface (77 checks) |
 | `server/fea.py`, `tests/test_fea.py` | Linear-static FEA: case setup on a copy of the part, gmsh mesh, CalculiX solve, result summary, plot; tests against beam theory |
 | `scripts/build_plugin.py` | Builds and validates `dist/` (plugin zip, `.mcpb`, generated `claude plugin eval` suite) |
 | `freecad-addon/` | MCP Reload addon + macro |

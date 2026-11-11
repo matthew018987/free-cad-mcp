@@ -1490,12 +1490,12 @@ def t_lookup_standard(args):
             out.append(standards.bearing_report(args["bearing"]))
         if args.get("gdt") is not None:
             out.append(tolerancing.gdt_card(args["gdt"]))
-        if args.get("fastener"):
+        if args.get("joint"):
             mount = args.get("mount")
             if mount not in (None, "", "floating", "fixed"):
                 raise ToolError("mount is floating (clearance holes in both parts) or fixed (one part tapped or "
                                 "pressed), got %r" % mount)
-            out.append(tolerancing.fastener_report(args["fastener"], args.get("clearance") or "normal", mount or None))
+            out.append(tolerancing.joint_report(args["joint"], args.get("clearance") or "normal", mount or None))
         if args.get("surface") is not None:
             out.append(tolerancing.surface_report(args["surface"]))
         if args.get("material"):
@@ -1513,7 +1513,7 @@ def t_lookup_standard(args):
                 "lookup_standard(tolerance='ISO 2768-m', d=80) - general tolerance at a size (without d: the table)\n"
                 "lookup_standard(bearing='608') - deep-groove ball bearing d, D, B, r_s min, seat fits\n"
                 "lookup_standard(gdt='position') - an ISO 1101 characteristic (gdt='all': the 14 and the modifiers)\n"
-                "lookup_standard(fastener='M5', mount='floating') - position tolerance for bolted holes at MMC\n"
+                "lookup_standard(joint='M5', mount='floating') - position tolerance for bolted holes at MMC\n"
                 "lookup_standard(surface='Ra 0.8') - surface texture against each process (or surface='turning')\n"
                 "lookup_standard(process='fdm') - process rules of thumb\n"
                 "sizes: %s · hole classes %s · shaft classes %s · up to 250 mm\n"
@@ -2636,7 +2636,7 @@ TOOLS = [
                     "size (without d: the whole table). bearing='608' → deep-groove ball bearing bore d, outer D, "
                     "width B, chamfer r_s min, seat fits. "
                     "gdt='position' → the ISO 1101 symbol, zone, datum rule and modifiers (gdt='all': all 14). "
-                    "fastener='M5' (clearance, mount) → the position tolerance bolted holes need at MMC. "
+                    "joint='M5' (clearance, mount) → the position tolerance bolted holes need at MMC. "
                     "surface='Ra 0.8' or a process → surface texture by process. tolerance='ISO 2768-mK' adds the "
                     "ISO 2768-2 geometrical tolerances. "
                     "process='fdm'|'sla'|'cnc'|'turning'|'laser'|'sheet' → design rules. Several keys can be "
@@ -2653,12 +2653,12 @@ TOOLS = [
                                                                        "'608', '6204-2RS', '625'."},
                           "gdt": {"type": "string", "description": "ISO 1101 characteristic, e.g. 'position', "
                                                                    "'flatness'; 'all' for the table."},
-                          "fastener": {"type": "string", "description": "Screw size for the bolted-joint rule, "
-                                                                        "e.g. 'M5'."},
+                          "joint": {"type": "string", "description": "Screw size for the bolted-joint rule, "
+                                                                     "e.g. 'M5'."},
                           "clearance": {"type": "string", "enum": ["fine", "normal", "coarse"],
-                                        "description": "With fastener: ISO 273 hole series (default normal)."},
+                                        "description": "With joint: ISO 273 hole series (default normal)."},
                           "mount": {"type": "string", "enum": ["floating", "fixed"],
-                                    "description": "With fastener: clearance holes in both parts, or one part "
+                                    "description": "With joint: clearance holes in both parts, or one part "
                                                    "tapped (default: both shown)."},
                           "surface": {"type": "string", "description": "'Ra 0.8', 'Rz 6.3' or a process name."},
                           "d": {"type": "number", "description": "Nominal size in mm for fit / tolerance."},
