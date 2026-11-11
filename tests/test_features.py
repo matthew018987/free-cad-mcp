@@ -207,9 +207,12 @@ fc.polar_pattern(c, k, 3, angle=180, center=(100, 0), name="Half")
     check("polar patterns build (about Z and about an off-centre axis)", not err and txt.startswith("BUILD ✓")
           and "Bolt ✓ (6×" in txt and "OffHole ✓ (3×" in txt, txt)
     err, txt, r = probe(c, "polpat", HOLE_MATCH % "Flange")
-    angs = sorted(round(math.degrees(math.atan2(p[1], p[0])) % 360, 3) for p in r.get("at", []))
-    check("…6 holes every 60° on r = 20, all matched to Bolt", r.get("names") == ["Bolt"] * 6
-          and angs == [0, 60, 120, 180, 240, 300], (txt, angs))
+    at = r.get("at", [])                                     # centres rounded to 0.001 mm: compare within 0.01
+    angs = sorted(math.degrees(math.atan2(p[1], p[0])) % 360 for p in at)
+    check("…6 holes every 60° on r = 20, all matched to Bolt", r.get("names") == ["Bolt"] * 6 and len(at) == 6
+          and all(abs(math.hypot(*p) - 20) < 0.01 for p in at)
+          and all(min(abs((a - e + 180) % 360 - 180) for a in angs) < 0.01 for e in range(0, 360, 60)),
+          (txt, [round(a, 3) for a in angs]))
     err, txt, r = probe(c, "polpat", HOLE_MATCH % "Off")
     pts = sorted((round(x - 100, 3), round(y, 3)) for x, y in r.get("at", []))
     check("…angle=180 with 3 copies: 0°, 90°, 180° around (100, 0)", r.get("names") == ["OffHole"] * 3
