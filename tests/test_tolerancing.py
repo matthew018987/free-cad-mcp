@@ -435,11 +435,24 @@ check("floating: ⌀0.5 each ✓, ⌀0.6 ✗; fixed: ⌀0.25 + ⌀0.25 ✓, ⌀0
       and not FC(0.3, 0.25, "M5", mount="fixed")[0])
 check("±0.2 on x and y is a ⌀0.566 position zone", close(T.equivalent_position(0.2), 0.565685, 1e-6))
 rep = T.joint_report("M5", mount="fixed")
-check("joint report: hole, screw, T, the fixed split with Ⓟ, the checks.json line for the same mount",
+check("joint report: hole, screw, T, the fixed split with Ⓟ, and the align check that exists today",
       "Ø5.5 H13 (5.5 … 5.68" in rep and "T = H − F = 0.5" in rep and "⌀0.25 Ⓟ" in rep and "floating (" not in rep
-      and "\"mount\": \"fixed\"" in rep, rep)
+      and "an align check in checks.json" in rep, rep)
 check("…bad clearance series and sizes are errors", "fine, normal or coarse" in err_of(T.joint, "M5", "tight")
       and "unknown metric size" in err_of(T.joint, "M7"))
+
+# what lookup_standard can print must point only at what the server does today: the tolerancing scheme
+# (tolerances.json), its checks, settings and tools arrive with M6.2 and later
+UNBUILT = ("tolerances.json", "_fit\"", "fastener_fit", "joint_fit", "general_surface", "stackup", "stack-up",
+           "inspect(level", "\"angle\"", "Part.datum")
+outputs = [T.gdt_card(n) for n in list(T.CHARACTERISTICS) + ["all", "size", "surface"]]
+outputs += [T.joint_report("M5", mount=m) for m in (None, "floating", "fixed")]
+outputs += [T.surface_report(s) for s in ["", "Ra 0.8", "Rz 6.3"] + sorted(S.CAPABILITY)]
+outputs += [S.general_tolerance_report("ISO 2768-mK", 40), S.general_tolerance_report("ISO 2768-2 K"),
+            S.bearing_report("608")]
+leaks = [(u, o.splitlines()[0]) for o in outputs for u in UNBUILT if u in o]
+check("lookup outputs (%d) mention nothing that is not built yet: no tolerances.json, fit checks, settings or "
+      "tools from later milestones" % len(outputs), not leaks, leaks)
 
 # ------------------------------------------------------------------------------------------- inspection
 print("inspection list and balloons")

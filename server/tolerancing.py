@@ -1381,8 +1381,7 @@ def joint_report(size, clearance="normal", mount=None, screw_d=None):
                          _g(r["T"]), _g(r["T"] / 2), _g(r["T"] / 2)))
     lines.append("  holes on the general tolerance: ±t on x and y is a ⌀%s·t zone (ISO 2768-m ±0.2 → ⌀%s)" % (
         _g(2 * math.sqrt(2), 3), _g(equivalent_position(0.2), 2)))
-    lines.append("  check it on every build: {\"type\": \"fastener_fit\", \"a\": …, \"b\": …, \"fastener\": \"%s\", "
-                 "\"mount\": \"%s\"} in checks.json" % (r["size"], mount or "floating"))
+    lines.append("  the two patterns must also line up as modelled: an align check in checks.json (max_offset)")
     return "\n".join(lines)
 
 
@@ -1400,14 +1399,12 @@ def gdt_card(name=None):
                   "Ⓛ least material · Ⓟ projected zone (tapped and press-fit holes) · Ⓔ envelope (on a size, "
                   "ISO 14405-1) · Ⓕ free state",
                   "  datums       A primary (3 points: what the part sits on) · B secondary (2: what locates it) · C "
-                  "tertiary (1: what stops rotation); letters without I, O and Q",
-                  "  write them in tolerances.json, e.g. {\"id\": \"m5-pos\", \"type\": \"position\", \"feature\": "
-                  "\"Plate.holes(d=5.5)\", \"tol\": 0.5, \"material\": \"M\", \"datums\": \"A B C\"}"]
+                  "tertiary (1: what stops rotation); letters without I, O and Q"]
         return "\n".join(lines)
     t = characteristic(name)
     if t == "size":
-        return ("size: '±0.05', '+0.1/0', limits [10.00, 10.05] or an ISO 286 class ('H7', 'h9', lookup_standard "
-                "fit='H7' with d); Ⓔ (envelope) is added to classes by default (ISO 14405-1)")
+        return ("size: '±0.05', '+0.1/0', limits 10.00 … 10.05 or an ISO 286 class ('H7', 'h9', lookup_standard "
+                "fit='H7' with d); under ISO 8015 a fit needs Ⓔ, the envelope requirement (ISO 14405-1)")
     if t == "surface":
         return surface_report()
     c = CHARACTERISTICS[t]
@@ -1424,7 +1421,7 @@ def gdt_card(name=None):
         lines.append("  basic dimensions (framed) locate the feature from the datums; bolted joints: lookup_standard "
                      "joint='M5' gives the zone")
     if t == "angularity":
-        lines.append("  give the basic angle: \"angle\": 30")
+        lines.append("  the angle to the datum is a basic (framed) dimension")
     return "\n".join(lines)
 
 
@@ -1467,8 +1464,8 @@ def surface_report(spec=None):
     lines.append("  preferred Ra series: %s" % " · ".join(_g(x) for x in standards.RA_SERIES))
     lines.append("  fit surfaces (rule): %s" % " · ".join(
         "IT%d%s Ra ≤ %s" % (g, " and finer" if i == 0 else "", _g(ra)) for i, (g, ra) in enumerate(standards.FIT_RA)))
-    lines.append("  write it: {\"id\": \"seat-Ra\", \"type\": \"surface\", \"feature\": \"Housing.holes(d=22)\", "
-                 "\"ra\": 1.6} in tolerances.json; the general one is project.json drawing.general_surface")
+    lines.append("  cnc and turning drawings already note the general requirement: SURFACE ROUGHNESS Ra 3.2 UNLESS "
+                 "STATED")
     return "\n".join(lines)
 
 

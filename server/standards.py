@@ -835,7 +835,7 @@ def bearing_report(designation):
         "  bore d %g · outside D %g · width B %g · chamfer r_s min %g" % (d, D, B, rs),
         "  ISO 492 normal class: bore 0/%+.3f (Ø%.3f … %g) · OD 0/%+.3f (Ø%.3f … %g)" % (
             b["bore_tol"][1], d + b["bore_tol"][1], d, b["od_tol"][1], D + b["od_tol"][1], D),
-        "  width B %g 0/%+.3f (ISO 492 normal class; the link a stack-up uses for this bearing)" % (
+        "  width B %g 0/%+.3f (ISO 492 normal class: the bearing's tolerance in an axial tolerance stack)" % (
             B, b["width_tol"][1]),
         "  shaft/housing fillet radius ≤ %g (r_s min) so the ring seats on the shoulder (rule)" % rs,
         "  shoulders: high enough to clear the ring chamfer, low enough to bear on that ring's face only — take "
