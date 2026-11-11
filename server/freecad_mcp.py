@@ -1488,6 +1488,8 @@ def t_lookup_standard(args):
                 out.append(standards.general_tolerance_report(spec, d))
         if args.get("bearing"):
             out.append(standards.bearing_report(args["bearing"]))
+        if args.get("material"):
+            out.append(standards.material_report(args["material"]))
         if args.get("gdt") is not None:
             out.append(tolerancing.gdt_card(args["gdt"]))
         if args.get("joint"):
@@ -1498,8 +1500,6 @@ def t_lookup_standard(args):
             out.append(tolerancing.joint_report(args["joint"], args.get("clearance") or "normal", mount or None))
         if args.get("surface") is not None:
             out.append(tolerancing.surface_report(args["surface"]))
-        if args.get("material"):
-            out.append(standards.material_report(args["material"]))
         if args.get("process"):
             rules = standards.PROCESS_RULES.get(args["process"].lower())
             if not rules:
@@ -1508,14 +1508,14 @@ def t_lookup_standard(args):
     except (ValueError, KeyError) as e:
         raise ToolError(str(e.args[0] if e.args else e))
     if not out:
-        return ("lookup_standard(size='M3') - holes, threads, heads, nuts, washers, inserts\n"
-                "lookup_standard(fit='H7/g6', d=8) - ISO 286 limits and fit type; fit='k6' (one class) → its limits\n"
-                "lookup_standard(tolerance='ISO 2768-m', d=80) - general tolerance at a size (without d: the table)\n"
-                "lookup_standard(bearing='608') - deep-groove ball bearing d, D, B, r_s min, seat fits\n"
+        return ("lookup_standard(size='M3') — holes, threads, heads, nuts, washers, inserts\n"
+                "lookup_standard(fit='H7/g6', d=8) — ISO 286 limits and fit type; fit='k6' (one class) → its limits\n"
+                "lookup_standard(tolerance='ISO 2768-m', d=80) — general tolerance at a size (without d: the table)\n"
+                "lookup_standard(bearing='608') — deep-groove ball bearing d, D, B, r_s min, seat fits\n"
+                "lookup_standard(process='fdm') — process rules of thumb\n"
                 "lookup_standard(gdt='position') - an ISO 1101 characteristic (gdt='all': the 14 and the modifiers)\n"
                 "lookup_standard(joint='M5', mount='floating') - position tolerance for bolted holes at MMC\n"
                 "lookup_standard(surface='Ra 0.8') - surface texture against each process (or surface='turning')\n"
-                "lookup_standard(process='fdm') - process rules of thumb\n"
                 "sizes: %s · hole classes %s · shaft classes %s · up to 250 mm\n"
                 "bearings: %s\nprocesses: %s" % (" ".join(standards.SIZES), standards.HOLE_CLASSES,
                                                  standards.SHAFT_CLASSES, standards.BEARING_RANGES,
@@ -2632,13 +2632,12 @@ TOOLS = [
                     "countersink, ISO 7380 button head, ISO 4032 nut + nut-trap size, ISO 7089 washer, heat-set "
                     "insert hole (vendor-typical), thread engagement. fit='H7/g6' with d=8 → ISO 286 limits, "
                     "clearance range and fit type; fit='k6' (one class) with d → that class's limits. "
+                    "gdt='position' → the ISO 1101 symbol, zone, datum rule and modifiers (gdt='all': all 14). "
+                    "joint='M5' (clearance, mount) → the position tolerance bolted holes need at MMC. "
+                    "surface='Ra 0.8' or a process → surface texture by process. "
                     "tolerance='ISO 2768-m' (or 'f'|'m'|'c'|'v') with d=80 → the general tolerance band at that "
                     "size (without d: the whole table). bearing='608' → deep-groove ball bearing bore d, outer D, "
                     "width B, chamfer r_s min, seat fits. "
-                    "gdt='position' → the ISO 1101 symbol, zone, datum rule and modifiers (gdt='all': all 14). "
-                    "joint='M5' (clearance, mount) → the position tolerance bolted holes need at MMC. "
-                    "surface='Ra 0.8' or a process → surface texture by process. tolerance='ISO 2768-mK' adds the "
-                    "ISO 2768-2 geometrical tolerances. "
                     "process='fdm'|'sla'|'cnc'|'turning'|'laser'|'sheet' → design rules. Several keys can be "
                     "combined in one call.",
      "inputSchema": _obj({"size": {"type": "string", "description": "Metric thread size, e.g. 'M3'."},
@@ -2648,9 +2647,11 @@ TOOLS = [
                                                                    "'H7'; needs d."},
                           "tolerance": {"type": "string", "description": "ISO 2768 general tolerance class: 'm' or "
                                                                          "'ISO 2768-m' (f, m, c, v); with d → the "
-                                                                         "band at that size."},
+                                                                         "band at that size; 'ISO 2768-mK' adds the "
+                                                                         "ISO 2768-2 geometrical tolerances."},
                           "bearing": {"type": "string", "description": "Deep-groove ball bearing designation, e.g. "
                                                                        "'608', '6204-2RS', '625'."},
+                          "d": {"type": "number", "description": "Nominal size in mm for fit / tolerance."},
                           "gdt": {"type": "string", "description": "ISO 1101 characteristic, e.g. 'position', "
                                                                    "'flatness'; 'all' for the table."},
                           "joint": {"type": "string", "description": "Screw size for the bolted-joint rule, "
@@ -2661,7 +2662,6 @@ TOOLS = [
                                     "description": "With joint: clearance holes in both parts, or one part "
                                                    "tapped (default: both shown)."},
                           "surface": {"type": "string", "description": "'Ra 0.8', 'Rz 6.3' or a process name."},
-                          "d": {"type": "number", "description": "Nominal size in mm for fit / tolerance."},
                           "process": {"type": "string", "enum": ["fdm", "sla", "cnc", "turning", "laser", "sheet"]}})},
     {"name": "export", "handler": t_export, "wants_request_id": True,
      "description": "Export parts for manufacturing and verify every file: step/iges (named; re-imported and "
