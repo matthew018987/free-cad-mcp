@@ -298,8 +298,12 @@ fc.fasteners("ISO7380 M3x8", "XY", [Placement(Vector(30, 0, 0), Rotation())], na
 u = fc.doc().getObjectsByLabel("Button")[0].Shape
 fc.result(top=round(s.BoundBox.ZMax, 3), low=round(s.BoundBox.ZMin, 3), btop=round(u.BoundBox.ZMax, 3),
           bd=round(u.BoundBox.XLength, 3))''')
-    check("countersunk head flush with the face, l overall; button head from a Placement", not err
-          and r.get("top") == 5 and r.get("low") == -7 and r.get("btop") == 1.65 and r.get("bd") == 5.7, (txt, txt2))
+    bt = standards.fastener("ISO7380 M3x8")
+    R = ((bt["dk"] / 2) ** 2 + bt["k"] ** 2) / (2 * bt["k"])            # the dome: k high over dk
+    rim = round(bt["k"] - (R - math.sqrt(R * R - (bt["s"] / 2) ** 2)), 3)  # its height where the socket cuts it
+    check("countersunk head flush with the face, l overall; button head from a Placement, its top where the socket "
+          "cuts the dome (%g, under k = %g)" % (rim, bt["k"]), not err and r.get("top") == 5 and r.get("low") == -7
+          and r.get("btop") == rim and r.get("bd") == 5.7, (txt, txt2))
     err, txt, _ = c.tool("check_fit", {"project": "csk", "objects": ["Lid", "Flat"], "contact_ok": [["Lid", "Flat"]]})
     check("…the countersunk screw does not interfere with the ISO 10642 countersink", not err
           and "INTERFERENCE" not in txt, txt)
