@@ -1,6 +1,7 @@
 # Roadmap: manufacturing evidence and LLM-driven iteration
 
-Status: **plan** (nothing below is built yet) · 2026-11-09 · follows M0-M5 in [design.md](design.md)
+Status: **plan** (nothing below is built yet) · 2026-11-09 · follows M0-M5 in [design.md](design.md) and M6, tolerancing
+([tolerancing-plan.md](tolerancing-plan.md))
 
 Two areas:
 
@@ -25,18 +26,18 @@ optional and discovered, never needed by an existing flow.
 
 | # | Feature | What Claude gets back | Surface | Needs | Size | Milestone |
 |---|---|---|---|---|---|---|
-| 1.1 | Slicer integration | print time, filament, support material, and the features the slicer drops, per orientation | `check_manufacturing(simulate=true)`; checks `print_time`, `filament`, `support`, `print_coverage` | F1 F5 | M | M6 |
-| 1.2 | Cost and lead time | unit price and NRE per part, process and quantity, a lead-time range, every rate and its basis | new tool `estimate`; check `cost` | F1 F6 | M | M6 |
-| 1.3a | Injection moulding | draft map, undercuts and the side actions that free them, wall uniformity, parting line, clamp force, cycle time | process `moulding`; `fc.draft`, `fc.shell`, `fc.rib`, `fc.boss` | F1 F4 | L | M8 |
-| 1.3b | Casting | 1.3a plus cores, hot spots and machining allowance; an as-cast and a machined model | process `casting`; `fc.cast_blank` | 1.3a | M | M8 |
-| 1.3c | Extrusion-profile frames | T-slot members, connectors, cut list with end machining, member deflection | process `profile_frame`; `fc.extrusion` | F1, 2.5 | M | M9 |
-| 1.3d | Welded frames | mitred and coped members, cut list nested into stock bars, fit-up, weld access, weld table | process `weldment`; `fc.member`, `fc.weldment` | 1.3c | L | M9 |
-| 1.4 | CAM toolpath preview | 2.5D toolpaths per setup, simulated stock removal, uncut and gouged volume with locations, cycle time | `check_manufacturing(simulate=true)` for cnc; check `uncut` | S1 F4 F5 | XL | M10 |
-| 2.1 | Sweeps and optimisation | table of evaluated points, best feasible point, binding constraint, sensitivities, Pareto front | new tool `sweep` | F3 F6 | M | M7 |
-| 2.2 | Visual diff | rN laid over rM: added, removed and moved material per part, with volumes and hole changes | `render(compare=…)` | F2 F4 | S-M | M7 |
-| 2.3 | Reference drawing check | calibrated overlay of drawing and model, per-dimension mismatches in mm, unmatched features | new tool `compare_reference`; check `drawing_dims` | F4 | L | M9 |
-| 2.4 | Revisions and change notes | Rev A/B/C per part, a drafted change note, a revision table on drawings, a git commit and tag per release | `release(revision=…, change_note=…)`; `inspect(level="revisions")` | F2 | M | M7 |
-| 2.5 | Quick-turn intake | datasheet → part spec → reference part with frames and automatic interface checks; STEP import with proposed frames; a shared library | new tool `reference_part`; `fc.ref_part(spec=…)`, `fc.ref_part(lib=…)` | F4 | L | M8 |
+| 1.1 | Slicer integration | print time, filament, support material, and the features the slicer drops, per orientation | `check_manufacturing(simulate=true)`; checks `print_time`, `filament`, `support`, `print_coverage` | F1 F5 | M | M7 |
+| 1.2 | Cost and lead time | unit price and NRE per part, process and quantity, a lead-time range, every rate and its basis | new tool `estimate`; check `cost` | F1 F6 | M | M7 |
+| 1.3a | Injection moulding | draft map, undercuts and the side actions that free them, wall uniformity, parting line, clamp force, cycle time | process `moulding`; `fc.draft`, `fc.shell`, `fc.rib`, `fc.boss` | F1 F4 | L | M9 |
+| 1.3b | Casting | 1.3a plus cores, hot spots and machining allowance; an as-cast and a machined model | process `casting`; `fc.cast_blank` | 1.3a | M | M9 |
+| 1.3c | Extrusion-profile frames | T-slot members, connectors, cut list with end machining, member deflection | process `profile_frame`; `fc.extrusion` | F1, 2.5 | M | M10 |
+| 1.3d | Welded frames | mitred and coped members, cut list nested into stock bars, fit-up, weld access, weld table | process `weldment`; `fc.member`, `fc.weldment` | 1.3c | L | M10 |
+| 1.4 | CAM toolpath preview | 2.5D toolpaths per setup, simulated stock removal, uncut and gouged volume with locations, cycle time | `check_manufacturing(simulate=true)` for cnc; check `uncut` | S1 F4 F5 | XL | M11 |
+| 2.1 | Sweeps and optimisation | table of evaluated points, best feasible point, binding constraint, sensitivities, Pareto front | new tool `sweep` | F3 F6 | M | M8 |
+| 2.2 | Visual diff | rN laid over rM: added, removed and moved material per part, with volumes and hole changes | `render(compare=…)` | F2 F4 | S-M | M8 |
+| 2.3 | Reference drawing check | calibrated overlay of drawing and model, per-dimension mismatches in mm, unmatched features | new tool `compare_reference`; check `drawing_dims` | F4 | L | M10 |
+| 2.4 | Revisions and change notes | Rev A/B/C per part, a drafted change note, a revision table on drawings, a git commit and tag per release | `release(revision=…, change_note=…)`; `inspect(level="revisions")` | F2 | M | M8 |
+| 2.5 | Quick-turn intake | datasheet → part spec → reference part with frames and automatic interface checks; STEP import with proposed frames; a shared library | new tool `reference_part`; `fc.ref_part(spec=…)`, `fc.ref_part(lib=…)` | F4 | L | M9 |
 
 F1-F6 are shared foundations (§2) and S1 is a spike. The server goes from 22
 tools to 26 (`estimate`, `sweep`, `compare_reference`, `reference_part`);
@@ -490,7 +491,7 @@ bending.
 | 11 | Sheet-metal gaps (not a new process) | hems, rounded outlines, automatic corner reliefs: the limits design.md lists today | `fc.sheet_metal` | S-M |
 | 12 | 3+2-axis CNC | indexed setups for the faces today's check says need 4/5-axis | the 1.4 CAM preview | M |
 
-**Order.** Awaiting the owner's ranking of this list; M8 and M9 hold 1-4 until
+**Order.** Awaiting the owner's ranking of this list; M9 and M10 hold 1-4 until
 then.
 
 ### 1.4 CAM toolpath preview (FreeCAD's CAM workbench)
@@ -499,7 +500,7 @@ then.
 material they leave or gouge, and a cycle time, beyond the ray-based access
 check.
 
-**Spike S1, a gate run early in M6.** In FreeCAD 1.1 console mode:
+**Spike S1, a gate run early in M7.** In FreeCAD 1.1 console mode:
 - import the CAM modules (FreeCAD's headless notes warn that not every
   workbench module imports by default)
 - create a job, `Path.Main.Job.Create("Job", [body], None)`, as FreeCAD's own
@@ -905,11 +906,11 @@ follows it).
 
 | Milestone | Scope | Why here |
 |---|---|---|
-| **M6 Cost and real printability** | F1, F5, F6, F2; 1.2 estimate on the geometry basis; 1.1 slicer; spike S1 | The most value for the effort: the estimate only needs metrics DFM already computes, and the slicer both sharpens it and closes the most common printability gap. S1 runs early because CAM is the biggest risk |
-| **M7 Iteration** | F3, F4 fixed scale; 2.1 sweeps; 2.2 visual diff; 2.4 revisions and git | Reuses F2 and F3, and makes everything after it more useful: a sweep can minimise cost, and a change note can carry its diff |
-| **M8 Intake and formative processes** | 2.5 intake and library; 1.3a moulding; 1.3b casting | The library feeds 1.3c; moulding and casting share the pull engine |
-| **M9 Frames and the reference check** | 1.3c profile frames; 1.3d weldments; 2.3 `compare_reference` | Frames use the library; the reference check uses F4's overlays |
-| **M10 CAM** | 1.4 toolpath preview; estimate v2 with toolpath times | Built on S1's outcome and every foundation |
+| **M7 Cost and real printability** | F1, F5, F6, F2; 1.2 estimate on the geometry basis; 1.1 slicer; spike S1 | The most value for the effort: the estimate only needs metrics DFM already computes, and the slicer both sharpens it and closes the most common printability gap. S1 runs early because CAM is the biggest risk |
+| **M8 Iteration** | F3, F4 fixed scale; 2.1 sweeps; 2.2 visual diff; 2.4 revisions and git | Reuses F2 and F3, and makes everything after it more useful: a sweep can minimise cost, and a change note can carry its diff |
+| **M9 Intake and formative processes** | 2.5 intake and library; 1.3a moulding; 1.3b casting | The library feeds 1.3c; moulding and casting share the pull engine |
+| **M10 Frames and the reference check** | 1.3c profile frames; 1.3d weldments; 2.3 `compare_reference` | Frames use the library; the reference check uses F4's overlays |
+| **M11 CAM** | 1.4 toolpath preview; estimate v2 with toolpath times | Built on S1's outcome and every foundation |
 
 ```
 F1 process registry ──┬──► 1.2 estimate ◄──── 1.1 slicer ◄──── F5 externals
@@ -932,7 +933,7 @@ F4 renderer ──────────────► 2.2, 2.3, 1.3a draft m
 |---|---|---|
 | Currency of the default cost table | **USD** (decided 2026-11-09), with a user rates file and calibration from real quotes | 1.2 |
 | Which slicer first | **OrcaSlicer, then PrusaSlicer**: recommended on licence, support and developer activity (§1.1), to confirm | 1.1 |
-| Order of the new processes | **open**: rank the candidate list in §1.3 | 1.3, M8-M9 |
+| Order of the new processes | **open**: rank the candidate list in §1.3 | 1.3, M9-M10 |
 | Revision scheme | **letters per part** (decided 2026-11-09; the industry norm, §2.4). Open: first release A or a dash (default A); git opt-in per project (recommended) | 2.4 |
 | May the server download vendor files itself? | **yes** (decided 2026-11-09), with the guards in §2.5 | 2.5 |
 | CAM output | **open**: recommended a labelled preview G-code export, never in a release by default | 1.4 |
