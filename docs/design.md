@@ -556,6 +556,12 @@ workflow never depends on path mapping.
 | **M4 package, reload, evals** | Cowork/Claude Code plugin + `.mcpb`, MCP Reload addon and macro, eval cases + harness + `claude plugin eval` suite; then a hardening round from the eval runs and an adversarial review (§13) | ✓ built. 14 eval cases; 1,013 stdio checks across 11 suites pass |
 | **M5 analysis** | FEM via CalculiX: material, fixtures, loads, mesh, solve → max von Mises, displacement, safety factor | ✓ built. `analyze` tool + `server/fea.py`: supports/loads on faces and holes (geometry references), forces, pressures, self weight; gmsh tet10 + CalculiX (bundled, ~2 s for a small part); results with location, stress away from supports, safety factor, reactions vs applied load, refined-mesh convergence; load cases in `fea.json`; `fea_safety`/`fea_stress`/`fea_displacement` checks, stale on geometry or case change, re-solved by release. Backlog round: natural frequencies and linear buckling (`fea_frequency`, `fea_buckling`), several parts bonded with CalculiX `*TIE` (FreeCAD's tie constraint tied coincident faces to themselves, so fea.py writes the input deck itself from gmsh's per-face groups and reads results with numpy), and ~7× faster solves (refined solve only for small meshes; the eval shelf bracket 150 s → 20 s). `tests/test_fea.py` checks a cantilever against beam theory (tip 0.581 mm vs 0.581–0.585; root 60 MPa), a uniform load (0.2177 mm exact), self weight, bolted holes, errors, stale checks and release |
 
+**M6 tolerancing** (planned in [tolerancing-plan.md](tolerancing-plan.md)): GD&T (datums, feature control frames,
+basic dimensions), surface texture (ISO 21920-1) and tolerance stack-ups (worst case, RSS, allocation, the
+bolted-joint rule) from a per-project `tolerances.json`, checked on every build, drawn on the sheets with stable
+balloon numbers, priced in `check_manufacturing` and listed for inspection in the release. Its stdlib core
+(`server/tolerancing.py`, with the `lookup_standard` gdt / joint / surface keys) is built; the rest follows.
+
 ### Implementation map
 
 | File | Role |
@@ -567,7 +573,7 @@ workflow never depends on path mapping.
 | `server/scene.py`, `server/viewer.py`, `server/viewer/` (`index.html`, `viewer.js`), `tests/test_viewer.py` | Live 3D viewer: per-build glTF scene, self-contained three.js page and its scene.js / model.js feed (rotate, section with caps, part toggles, x-ray, measure, checks) |
 | `server/analysis.py` | Worker side: introspection in global coordinates (containers, links), hole detection, geometry references, `measure`, `check_fit`, `section` (+ matplotlib plot with zoomed insets), `checks.json` evaluation, snapshots and GUI-edit diffs |
 | `server/fileutil.py` | Stdlib helpers shared by the server and the workers: file hashes and numbered revisions (`<stem>.rNN.FCStd`) |
-| `server/standards.py` | Stdlib tables shared by the server and fclib: ISO 261/262, 273, 4762 + DIN 974-1, 10642, 7380, 4032, 7089, ISO 286 (IT6–8, up to 250 mm), heat-set inserts (vendor-typical), process rules |
+| `server/standards.py` | Stdlib tables shared by the server and fclib: ISO 261/262, 273, 4762 + DIN 974-1, 10642, 7380, 4032, 7089, ISO 286 (IT6–8, up to 250 mm), heat-set inserts (vendor-typical), process rules; for M6: ISO 273 hole classes, IT grades to 500 mm, ISO 2768-2 (withdrawn 2021, still the shops' "mK"), ISO 492 bearing widths, the preferred Ra series and per-process capability (rule) |
 | `tests/test_core_loop.py` | M1: end-to-end checks over stdio with real FreeCAD (50) |
 | `tests/test_verification.py`, `tests/fixtures/fitlab/` | M2: verification against a fixture with known answers (56) |
 | `tests/mcp_client.py` | Shared stdio JSON-RPC test client |
@@ -579,6 +585,7 @@ workflow never depends on path mapping.
 | `tests/test_analysis.py` … `test_evals_plugin.py` | Hardening suites per area: analysis (123), drawings (115), manufacture/standards (116), worker/fclib (110), server (245), reload addon (46), evals/plugin (66) |
 | `tests/test_features.py` | fc.faces, shell, draft, linear / polar patterns, mirror (holes matched on every copy, pattern of a pattern), fasteners (volumes, seating, check_fit stack-ups), lookup_standard(fastener) |
 | `server/fea.py`, `tests/test_fea.py` | Linear-static FEA: case setup on a copy of the part, gmsh mesh, CalculiX solve, result summary, plot; tests against beam theory |
+| `server/tolerancing.py`, `tests/test_tolerancing.py` | Tolerancing core (stdlib, tested without FreeCAD): requirement parsing and the scheme rules, feature control frame / datum / surface texture SVGs, stack-ups (worst case, RSS, Monte Carlo, contributions, IT allocation), the bolted-joint rule, inspection rows and stable balloon numbers; `lookup_standard` gdt / joint / surface (78 checks) |
 | `scripts/build_plugin.py` | Builds and validates `dist/` (plugin zip, `.mcpb`, generated `claude plugin eval` suite) |
 | `freecad-addon/` | MCP Reload addon + macro |
 | `evals/` | 14 eval cases, fixtures, `mcp_cli.py` (tools from a shell), `run_case.py` (setup / brief / grade) |

@@ -95,7 +95,7 @@ the design playbook (the `guide` tool serves the same text).
 | `measure` | Distances, angles, coaxiality and radial gaps, hole spacing, wall thickness, pattern alignment, frames |
 | `check_fit` | Interference, contact and clearance for every pair of parts |
 | `section` | 2D cross-section: areas, extents, in-plane gaps or overlaps, with a hatched plot |
-| `lookup_standard` | ISO clearance holes, threads, fasteners, inserts, ISO 286 fits, ISO 2768 tolerances, bearings, process rules |
+| `lookup_standard` | ISO clearance holes, threads, fasteners, inserts, ISO 286 fits, ISO 2768 tolerances, bearings, GD&T characteristics, bolted-joint position tolerances, surface texture by process, process rules |
 | `analyze` | FEA of one part or bonded parts (gmsh + CalculiX, bundled with FreeCAD): stress, safety factor, deflection, natural frequencies, buckling |
 | `check_manufacturing` | Per-process checks: print orientation and overhangs, tool access and corner radii, bar stock, plate uniformity |
 | `drawing` | ISO part drawings: `create` (views, scale, verified dimensions, callouts, title block → PDF/SVG/DXF), `read`, `edit` |
@@ -183,6 +183,7 @@ server/                  the MCP server and the FreeCAD workers
   drawing_worker.py      TechDraw drawings (in the FreeCAD GUI process)
   fea.py                 FEA: gmsh mesh, CalculiX solve, results
   standards.py           ISO tables
+  tolerancing.py         GD&T rules and symbols, tolerance stack-ups, inspection list (stdlib)
 freecad-addon/           MCP Reload addon and macro
 docs/                    design notes, packaged plugin README, images
 examples/                worked examples

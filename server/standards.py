@@ -27,6 +27,8 @@ CLEARANCE = {"M1.6": (1.7, 1.8, 2.0), "M2": (2.2, 2.4, 2.6), "M2.5": (2.7, 2.9, 
              "M6": (6.4, 6.6, 7.0), "M8": (8.4, 9.0, 10.0), "M10": (10.5, 11.0, 12.0),
              "M12": (13.0, 13.5, 14.5), "M14": (15.0, 15.5, 16.5), "M16": (17.0, 17.5, 18.5),
              "M20": (21.0, 22.0, 24.0), "M24": (25.0, 26.0, 28.0)}
+# ISO 273 tolerance class of each clearance hole series (lower deviation 0: the nominal is the smallest hole)
+CLEARANCE_CLASS = {"fine": "H12", "normal": "H13", "coarse": "H14"}
 
 # Tap drill for coarse threads (D − P, rounded to common drill sizes)
 TAP_DRILL = {"M1.6": 1.25, "M2": 1.6, "M2.5": 2.05, "M3": 2.5, "M4": 3.3, "M5": 4.2, "M6": 5.0,
@@ -175,6 +177,11 @@ IT = {5: [4, 5, 6, 8, 9, 11, 13, 15, 18, 20],
       12: [100, 120, 150, 180, 210, 250, 300, 350, 400, 460],
       13: [140, 180, 220, 270, 330, 390, 460, 540, 630, 720],
       14: [250, 300, 360, 430, 520, 620, 740, 870, 1000, 1150]}
+# IT5 to IT14 over 250 up to 315, 400 and 500 mm (ISO 286-1 Table 1): grades only, the fit deviations stop at 250
+_RANGES_IT = _RANGES + [315, 400, 500]
+_IT_OVER_250 = {5: [23, 25, 27], 6: [32, 36, 40], 7: [52, 57, 63], 8: [81, 89, 97], 9: [130, 140, 155],
+                10: [210, 230, 250], 11: [320, 360, 400], 12: [520, 570, 630], 13: [810, 890, 970],
+                14: [1300, 1400, 1550]}
 # shaft fundamental deviations: upper (es) for d e f g h; lower (ei) for k m n p
 # (k: the tabulated ei holds for k4–k7; k3 and k8 upwards have ei = 0)
 SHAFT_FD = {"d": ("es", [-20, -30, -40, -50, -65, -80, -100, -120, -145, -170]),
@@ -236,6 +243,8 @@ BEARING_RANGES = "604–609, 623–629, 6000–6006, 6200–6206, 6300–6306, 6
 # ISO 492 normal tolerance class: mean bore / outside diameter deviation (upper 0, lower µm) by size (upper bound)
 _BRG_BORE = [(10, -8), (18, -8), (30, -10), (50, -12), (80, -15)]
 _BRG_OD = [(18, -8), (30, -9), (50, -11), (80, -13), (120, -15)]
+# ISO 492 normal class: ring width deviation (upper 0, lower µm) by bore d (upper bound); stack-ups use it
+_BRG_WIDTH = [(2.5, -40), (50, -120), (80, -150), (120, -200)]
 
 PROCESS_RULES = {
     "fdm": ["holes print 0.1–0.3 mm undersize: fc.holes enlarges clearance and plain Ø holes of fdm parts by "
@@ -692,7 +701,12 @@ def _arcmin(m):
 
 
 def general_tolerance_report(cls, d=None):
-    k = parse_general_class(cls)
+    try:
+        k = parse_general_class(cls)
+    except ValueError:
+        if parse_general_geometric(cls):             # 'ISO 2768-2 K', 'K': the geometric table alone
+            return general_geometric_report(cls, d)
+        raise
     lows = [0.5] + GT_BANDS[:-1]
     lines = ["ISO 2768-%s (%s) — general tolerances for sizes without an individual tolerance" % (k, GT_NAMES[k])]
     if d is not None:
@@ -705,6 +719,8 @@ def general_tolerance_report(cls, d=None):
     lines.append("  angles (shorter leg)   up to 10 %s · 10–50 %s · 50–120 %s · 120–400 %s · over 400 %s"
                  % tuple(_arcmin(m) for m in GT_ANGLE[k]))
     lines.append("  mating sizes need a fit, not the general tolerance (lookup_standard fit='H7/g6' or 'k6' with d)")
+    if parse_general_geometric(cls):
+        lines.append(general_geometric_report(cls, d))
     return "\n".join(lines)
 
 
@@ -714,6 +730,166 @@ def is_general_class(spec):
         return "2768" in str(spec) or str(spec).strip().lower() in GT_NAMES.values()
     except ValueError:
         return False
+
+
+def it_um(grade, d):
+    """ISO 286-1 standard tolerance IT<grade> (µm) at nominal size d: IT5 to IT14, up to 500 mm (the fit
+    deviations in tolerance() stop at 250 mm; the grades alone go further, for allocation)."""
+    try:
+        g = int(grade)
+    except (TypeError, ValueError):
+        raise ValueError("IT grade %r: give a number from %d to %d" % (grade, min(IT), max(IT)))
+    if g not in IT:
+        raise ValueError("IT grades here are IT%d to IT%d (got IT%s)" % (min(IT), max(IT), grade))
+    d = float(d)
+    if not d > 0:
+        raise ValueError("d must be a size > 0 mm (got %r)" % d)
+    for i, ub in enumerate(_RANGES_IT):
+        if d <= ub:
+            return (IT[g] + _IT_OVER_250[g])[i]
+    raise ValueError("ISO 286 grades here cover sizes up to 500 mm (got %g)" % d)
+
+
+# ------------------------------------------------- ISO 2768-2 general geometrical tolerances (H, K, L)
+# Withdrawn in 2021 (replaced by ISO 22081), but "ISO 2768-mK" is still what most shops expect on a drawing.
+GT2_NOTE = ("ISO 2768-2 was withdrawn in 2021 and replaced by ISO 22081 (a general profile tolerance to the "
+            "part's datums), but \"ISO 2768-mK\" is still what most machine shops expect on a drawing")
+GT2_FLAT_BANDS = [10, 30, 100, 300, 1000, 3000]         # straightness and flatness: by the nominal length
+GT2_FLAT = {"H": [0.02, 0.05, 0.1, 0.2, 0.3, 0.4], "K": [0.05, 0.1, 0.2, 0.4, 0.6, 0.8],
+            "L": [0.1, 0.2, 0.4, 0.8, 1.2, 1.6]}
+GT2_BANDS = [100, 300, 1000, 3000]          # perpendicularity (by the shorter side) and symmetry: by length
+GT2_PERP = {"H": [0.2, 0.3, 0.4, 0.5], "K": [0.4, 0.6, 0.8, 1.0], "L": [0.6, 1.0, 1.5, 2.0]}
+GT2_SYM = {"H": [0.5, 0.5, 0.5, 0.5], "K": [0.6, 0.6, 0.8, 1.0], "L": [0.6, 1.0, 1.5, 2.0]}
+GT2_RUNOUT = {"H": 0.1, "K": 0.2, "L": 0.5}
+
+
+def parse_general_geometric(cls):
+    """The ISO 2768-2 class of a general tolerance spec: 'ISO 2768-mK' → 'K', 'fH' → 'H',
+    'ISO 2768-2 L' → 'L', 'K' → 'K'; None when it names no geometric class ('ISO 2768-m')."""
+    s = str(cls or "").strip().upper().replace(" ", "")
+    m = re.match(r"^(?:ISO)?(?:2768(?:-2)?-?)?([FMCV]?)([HKL])$", s)
+    return m.group(2) if m else None
+
+
+def general_geometric(cls, characteristic, length=None):
+    """ISO 2768-2 general tolerance (mm) of one characteristic: straightness and flatness by the
+    nominal length, perpendicularity by the shorter side, symmetry by length, circular run-out."""
+    k = parse_general_geometric(cls)
+    if not k:
+        raise ValueError("general geometrical class %r: use H, K or L, e.g. 'ISO 2768-mK'" % (cls,))
+    c = str(characteristic or "").strip().lower()
+    if c in ("circular_runout", "runout", "circular run-out"):
+        return GT2_RUNOUT[k]
+    if c in ("straightness", "flatness"):
+        bands, table = GT2_FLAT_BANDS, GT2_FLAT
+    elif c in ("perpendicularity", "symmetry"):
+        bands, table = GT2_BANDS, GT2_PERP if c == "perpendicularity" else GT2_SYM
+    else:
+        raise ValueError("ISO 2768-2 gives general tolerances for straightness, flatness, perpendicularity, "
+                         "symmetry and circular run-out only: %s needs its own tolerance" % characteristic)
+    if length is None:
+        raise ValueError("ISO 2768-2 %s needs the nominal length in mm" % c)
+    i = _gt_band(bands, float(length))
+    if i is None:
+        raise ValueError("ISO 2768-2 covers lengths up to 3000 mm")
+    return table[k][i]
+
+
+def general_geometric_report(cls, d=None):
+    k = parse_general_geometric(cls)
+    if not k:
+        raise ValueError("general geometrical class %r: use H, K or L, e.g. 'ISO 2768-mK'" % (cls,))
+
+    def row(bands, vals):
+        lows = [0] + bands[:-1]
+        return " · ".join(("up to %g: %g" % (hi, v)) if lo == 0 else ("%g to %g: %g" % (lo, hi, v))
+                          for lo, hi, v in zip(lows, bands, vals))
+    lines = ["ISO 2768-2 class %s: general geometrical tolerances for features without their own" % k,
+             "  straightness, flatness (by length)   " + row(GT2_FLAT_BANDS, GT2_FLAT[k]),
+             "  perpendicularity (by the shorter side)   " + row(GT2_BANDS, GT2_PERP[k]),
+             "  symmetry (by length)   " + row(GT2_BANDS, GT2_SYM[k]),
+             "  circular run-out   %g" % GT2_RUNOUT[k],
+             "  parallelism: the size tolerance or the flatness, whichever is larger; coaxiality: up to the "
+             "run-out value"]
+    if d is not None:
+        lines.insert(1, "  %g mm → flatness %g · perpendicularity %g · symmetry %g · run-out %g" % (
+            float(d), general_geometric(k, "flatness", d), general_geometric(k, "perpendicularity", d),
+            general_geometric(k, "symmetry", d), GT2_RUNOUT[k]))
+    lines.append("  note: " + GT2_NOTE)
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------- surface texture (ISO 21920-1)
+# Preferred Ra values (µm): surface texture requirements are written in this series
+RA_SERIES = [0.012, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.3, 12.5, 25, 50]
+# Ra (µm) a fit surface should not exceed, by its ISO 286 grade (rule: from the bearing makers' seat
+# recommendations, shaft seats IT6 Ra 0.8, housing seats IT7 Ra 1.6)
+FIT_RA = [(6, 0.8), (7, 1.6), (8, 3.2)]
+
+# What each process holds (rule, typical job-shop values; shops differ, and project.json dfm.capability
+# overrides them): per kind, (smallest at standard price, smallest with a price premium, the operation
+# needed below that, or None when the process cannot). linear: ± mm · position: zone ⌀ mm ·
+# form, orientation: mm per 100 mm · runout: mm · it: ISO 286 grade · ra: µm.
+CAPABILITY = {
+    "cnc": {"linear": (0.05, 0.01, "grinding or jig boring"), "position": (0.1, 0.025, "jig boring and CMM "
+            "inspection"), "form": (0.05, 0.01, "grinding or lapping"), "orientation": (0.05, 0.01, "grinding"),
+            "runout": (0.05, 0.01, "grinding"), "it": (8, 6, "honing or grinding"),
+            "ra": (3.2, 0.8, "grinding or lapping")},
+    "turning": {"linear": (0.05, 0.01, "grinding"), "position": (0.1, 0.025, "jig boring"),
+                "form": (0.02, 0.005, "grinding"), "orientation": (0.05, 0.01, "grinding"),
+                "runout": (0.03, 0.01, "grinding between centres"), "it": (8, 6, "grinding"),
+                "ra": (1.6, 0.4, "grinding or polishing")},
+    "fdm": {"linear": (0.2, 0.1, None), "position": (0.4, 0.2, None), "form": (0.3, 0.15, None),
+            "orientation": (0.3, 0.15, None), "runout": (0.3, 0.15, None), "it": (14, 12, None),
+            "ra": (25, 12.5, None)},
+    "sla": {"linear": (0.1, 0.05, None), "position": (0.2, 0.1, None), "form": (0.15, 0.08, None),
+            "orientation": (0.15, 0.08, None), "runout": (0.15, 0.08, None), "it": (12, 11, None),
+            "ra": (3.2, 1.6, None)},
+    "laser": {"linear": (0.1, 0.05, None), "position": (0.2, 0.1, None), "form": (0.5, 0.2, None),
+              "orientation": (0.5, 0.2, None), "runout": (0.5, 0.2, None), "it": (12, 11, None),
+              "ra": (12.5, 3.2, None)},
+    "sheet": {"linear": (0.2, 0.1, None), "position": (0.4, 0.2, None), "form": (0.5, 0.3, None),
+              "orientation": (0.5, 0.3, None), "runout": (0.5, 0.3, None), "it": (13, 12, None),
+              "ra": (3.2, 1.6, None)},
+}
+CAPABILITY_KINDS = ("linear", "position", "form", "orientation", "runout", "it", "ra")
+
+
+def capability(process, kind, value, length=None, table=None):
+    """How hard a requirement is for a process: ('standard' | 'precision' | 'special' | 'beyond', note).
+    value: ± mm (linear), zone mm (position, runout), mm (form, orientation; normalised to 100 mm by
+    length, floored at 25 mm), ISO 286 grade (it) or µm (ra). table: overrides (dfm.capability)."""
+    proc = str(process or "").strip().lower()
+    rules = dict(CAPABILITY.get(proc) or {})
+    if isinstance(table, dict):
+        for k, v in table.items():
+            if k in CAPABILITY_KINDS and isinstance(v, (list, tuple)) and len(v) >= 2:
+                rules[k] = (float(v[0]), float(v[1]), v[2] if len(v) > 2 else rules.get(k, (0, 0, None))[2])
+    if kind not in CAPABILITY_KINDS:
+        raise ValueError("capability kind %r: one of %s" % (kind, ", ".join(CAPABILITY_KINDS)))
+    if kind not in rules:
+        raise ValueError("no capability data for process %r (have %s)" % (process, ", ".join(sorted(CAPABILITY))))
+    std, fine, op = rules[kind]
+    v = float(value)
+    if kind in ("form", "orientation") and length:
+        v = v * 100.0 / max(float(length), 25.0)
+    if kind == "it":
+        g = int(round(v))
+        if g >= std:
+            return "standard", ""
+        if g >= fine:
+            return "precision", "IT%d: precision work, expect a price premium" % g
+        return ("special", "IT%d needs %s" % (g, op)) if op else \
+            ("beyond", "IT%d is finer than %s reaches (IT%d at best): machine the feature after" % (g, proc, fine))
+    unit = "µm" if kind == "ra" else "mm"
+    if v >= std - 1e-9:
+        return "standard", ""
+    if v >= fine - 1e-9:
+        return "precision", "%s %g %s: precision work, expect a price premium" % (kind, float(value), unit)
+    if op:
+        return "special", "%s %g %s needs %s" % (kind, float(value), unit, op)
+    return "beyond", "%s %g %s is finer than %s reaches (%g at best): machine or finish the feature after" % (
+        kind, float(value), unit, proc, fine)
 
 
 # ------------------------------------------------------------------------------- bearings
@@ -732,7 +908,8 @@ def _bearing_key(designation):
 
 def bearing(designation):
     """Deep-groove ball bearing by designation ('608', '6204-2RS', '61804') →
-    {designation, d, D, B, r_s_min, suffix, bore_tol, od_tol}. ValueError naming the table otherwise."""
+    {designation, d, D, B, r_s_min, suffix, bore_tol, od_tol, width_tol}. ValueError naming the table
+    otherwise."""
     key, suffix = _bearing_key(designation)
     if key not in BEARINGS:
         raise ValueError("no data for bearing %r — tabulated deep-groove ball bearings: %s (ISO 15); for others "
@@ -740,8 +917,9 @@ def bearing(designation):
     d, D, B, rs = BEARINGS[key]
     bore = next(v for ub, v in _BRG_BORE if d <= ub)
     od = next(v for ub, v in _BRG_OD if D <= ub)
+    width = next(v for ub, v in _BRG_WIDTH if d <= ub)
     return {"designation": key, "d": d, "D": D, "B": B, "r_s_min": rs, "suffix": suffix,
-            "bore_tol": (0.0, bore / 1000.0), "od_tol": (0.0, od / 1000.0)}
+            "bore_tol": (0.0, bore / 1000.0), "od_tol": (0.0, od / 1000.0), "width_tol": (0.0, width / 1000.0)}
 
 
 def bearing_report(designation):
@@ -754,6 +932,8 @@ def bearing_report(designation):
         "  bore d %g · outside D %g · width B %g · chamfer r_s min %g" % (d, D, B, rs),
         "  ISO 492 normal class: bore 0/%+.3f (Ø%.3f … %g) · OD 0/%+.3f (Ø%.3f … %g)" % (
             b["bore_tol"][1], d + b["bore_tol"][1], d, b["od_tol"][1], D + b["od_tol"][1], D),
+        "  width B %g 0/%+.3f (ISO 492 normal class: the bearing's tolerance in an axial tolerance stack)" % (
+            B, b["width_tol"][1]),
         "  shaft/housing fillet radius ≤ %g (r_s min) so the ring seats on the shoulder (rule)" % rs,
         "  shoulders: high enough to clear the ring chamfer, low enough to bear on that ring's face only — take "
         "da min/max and Da max from the maker's catalogue (rule)",
