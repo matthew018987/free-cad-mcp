@@ -1,6 +1,6 @@
 # Tolerancing: GD&T and tolerance stack-up (M6 plan)
 
-Status: **planned, decisions taken** (§10) · 2026-11-09 · branch `feature/tolerancing`, from `main` at `6aec6c5` · FreeCAD 1.1.4
+Status: **M6.1 built and tested** (every suite passed on the Mac, 2026-11-11), the rest planned; decisions in §10 · branch `feature/tolerancing`, from `main` at `6aec6c5` · FreeCAD 1.1.4
 
 **Goal.** A CNC or turning shop can quote, make and inspect a part from the
 release zip alone: a datum reference frame, geometric tolerances on the
@@ -8,7 +8,7 @@ functional features, toleranced functional sizes, surface texture where it
 matters, a general tolerance and a general surface texture for the rest, and a
 ballooned drawing with the matching list of characteristics to inspect. No
 tolerance is a guess:
-each one traces to a requirement, a fit, a fastener rule or a stack-up, and
+each one traces to a requirement, a fit, the bolted-joint rule or a stack-up, and
 stack-ups are re-verified on every build like any other check.
 
 ---
@@ -77,7 +77,7 @@ where cover and housing meet.
         {"id": "depth", "type": "size", "between": ["Housing.face(+Z)", "Housing.face(+Z, at=-10.12)"],
          "tol": "±0.035", "source": "stack end-play"},
         {"id": "m5-tapped", "type": "position", "feature": "Housing.holes(d=4.2)", "tol": 0.25, "projected": 6,
-         "datums": "A B", "source": "fixed M5 with Cover (fastener rule)"}
+         "datums": "A B", "source": "fixed M5 with Cover (bolted-joint rule)"}
       ]
     },
     "Cover": {
@@ -114,7 +114,7 @@ where cover and housing meet.
 | `datums` | `"A"`, `"A B C"`, `"A B(M)"`, common datum `"A-B"` |
 | `material`, `projected`, `envelope`, `all_around` | Ⓜ / Ⓛ, Ⓟ height in mm, Ⓔ on a size, profile all around |
 | `ra` / `rz`, `removal`, `lay`, `method` | `surface` entries: the upper limit in µm (ISO 21920-1), whether material removal is required (default yes on cnc/turning parts), the lay symbol (`=`, `⊥`, `X`, `M`, `C`, `R`, `P`) and a process note such as "ground" |
-| `source` | Why this value (requirement, fit, fastener rule, stack): shown in the README and the inspection list |
+| `source` | Why this value (requirement, fit, bolted-joint rule, stack): shown in the README and the inspection list |
 
 - Ids are unique per part and written `Part.id` from outside it (stack links).
 - The general surface texture sits beside the general tolerance:
@@ -169,7 +169,7 @@ Rules (a data table in `tolerancing.py`, so each finding names its rule):
 - An ISO 286 fit under ISO 8015 needs the envelope requirement Ⓔ
   (ISO 14405-1) to act as a fit: ⚠ when `envelope` is missing.
 - A position with Ⓜ on standard clearance holes is compared with the
-  fastener rule (§5.5).
+  bolted-joint rule (§5.5).
 - Surface texture: a value outside the preferred series (Ra 0.025 … 50 µm)
   warns; a fit surface coarser than the bearing makers' seat recommendation
   (Ra 1.6 for IT7, Ra 0.8 for IT6 and finer: rule) warns.
@@ -233,7 +233,7 @@ that centres the mean, stated as the parameter changes to make.
   H13 / H14, so H = the nominal), F = the largest screw (nominal major Ø,
   conservative).
 
-`lookup_standard(fastener="M5", clearance="normal", mount="floating")` →
+`lookup_standard(joint="M5", clearance="normal", mount="floating")` →
 "Ø5.5 H13 (5.500 … 5.680) · M5: ⌖ ⌀0.5 Ⓜ per part; fixed: ⌀0.5 shared".
 Holes left to the general tolerance are converted to the equivalent position
 zone (±t on two axes → ⌀2√2·t), so a pattern located by ISO 2768-m ±0.2 shows
@@ -243,12 +243,12 @@ as ⌀0.57 > ⌀0.5 ✗.
 ```json
 [{"id": "end-play", "type": "stackup", "stack": "end-play", "method": "worst_case", "min": 0.05, "max": 0.30},
  {"id": "end-play-rss", "type": "stackup", "stack": "end-play", "method": "rss", "max_out_pct": 0.27},
- {"id": "cover-screws", "type": "fastener_fit", "a": "Cover.holes(d=5.5)", "b": "Housing.holes(d=4.2)",
-  "fastener": "M5", "mount": "fixed"}]
+ {"id": "cover-screws", "type": "joint_fit", "a": "Cover.holes(d=5.5)", "b": "Housing.holes(d=4.2)",
+  "screw": "M5", "mount": "fixed"}]
 ```
 They need no solver, so they run on every build, `release` gates on them and
 the README lists them under "checks changed since the last release", as for
-any check. `fastener_fit` also checks that the patterns align nominally.
+any check. `joint_fit` also checks that the patterns align nominally.
 
 ### 5.7 The `stackup` tool
 ```
@@ -355,7 +355,7 @@ than the general tolerance or finer than the general surface, which is what
 quoting systems price.
 
 **`release`**:
-- refuses while a scheme entry is ✗, a `stackup` or `fastener_fit` check
+- refuses while a scheme entry is ✗, a `stackup` or `joint_fit` check
   fails, or a sheet lacks an item of its part's scheme;
 - README per part: the datums in words ("A = bottom face, B = Ø22 bore"),
   the frames and toleranced sizes, and every stack with its method and result
@@ -376,7 +376,7 @@ quoting systems price.
   1. datums from the function: A = what it sits on, B = what locates it (a
      bore, a pin hole, an edge), C = what stops rotation;
   2. fits from `lookup_standard`, with Ⓔ;
-  3. bolt patterns from the fastener rule, one `fastener_fit` check per
+  3. bolt patterns from the bolted-joint rule, one `joint_fit` check per
      bolted joint;
   4. a stack for every functional gap, worst case first, then allocate;
   5. surface texture on the surfaces that do work (bearing seats, seal
@@ -396,15 +396,17 @@ on the Mac.
 | Phase | Scope | Runs on | Done when |
 |---|---|---|---|
 | **M6.0 spike** | TechDraw on FreeCAD 1.1.4: list the `TechDraw::` types (confirm no native frame or datum); `TheoreticalExact` in PDF, SVG and the PNG preview; `DrawViewSymbol` with the frame, datum and surface SVGs `tolerancing.py` generates (anchor and scale conventions, osifont text, export fidelity); numbered `DrawViewBalloon`s made from Python (origin and bubble coordinates, export); time per object; save and reopen | Mac (GUI): `/Applications/FreeCAD.app/Contents/Resources/bin/python docs/prototypes/gdt_prototype.py` (any Python 3 launches it) | Its `findings.json`, `spike.pdf` and `crop_*.png` reviewed and recorded as a table like `design.md` §2.3 |
-| **M6.1 foundation** | `server/tolerancing.py`: parsing, characteristic table, validation rules, frame/datum/surface SVG and text, worst case / RSS / Monte Carlo / contribution / allocation, fastener rule, inspection rows. `standards.py`: ISO 2768-2 H/K/L (marked withdrawn, with the ISO 22081 note), ISO 273 H12/H13/H14, ISO 492 widths, IT ranges to 500 mm, process capability (IT grades, geometric, Ra), the preferred Ra series. `lookup_standard`: `fastener`, `gdt` (a reference card per characteristic), `surface`, `tolerance="ISO 2768-mK"` | Anywhere (stdlib) | `tests/test_tolerancing.py`: textbook stacks, asymmetric limits, allocation, the fastener rule, table edges, every validation rule, well-formed SVG with the right compartments |
+| **M6.1 foundation** | `server/tolerancing.py`: parsing, characteristic table, validation rules, frame/datum/surface SVG and text, worst case / RSS / Monte Carlo / contribution / allocation, the bolted-joint rule, inspection rows. `standards.py`: ISO 2768-2 H/K/L (marked withdrawn, with the ISO 22081 note), ISO 273 H12/H13/H14, ISO 492 widths, IT ranges to 500 mm, process capability (IT grades, geometric, Ra), the preferred Ra series. `lookup_standard`: `joint`, `gdt` (a reference card per characteristic), `surface`, `tolerance="ISO 2768-mK"` | Anywhere (stdlib) | `tests/test_tolerancing.py`: textbook stacks, asymmetric limits, allocation, the bolted-joint rule, table edges, every validation rule, well-formed SVG with the right compartments |
 | **M6.2 scheme in the loop** | Load and resolve `tolerances.json` in the build; the report section; `inspect(level="tolerances")`; `Part.datum(A)`; implicit fits; revision inputs; capability findings in `check_manufacturing`; playbook pages | Mac | Fixture `tests/fixtures/gdtlab/`: every rule triggered once; the revision moves when only `tolerances.json` changes |
-| **M6.3 stack-up** | `stackup` tool and worker op, continuity and closure, tolerance sources, `stackup` and `fastener_fit` checks, allocation, `save`, the `floor` selector; then `auto` | Mac (maths anywhere) | Fixture `tests/fixtures/stacklab/` (housing, 608 envelope, cover): the numbers in §5.7, broken and non-closing chains, checks pass and fail, the release gate |
+| **M6.3 stack-up** | `stackup` tool and worker op, continuity and closure, tolerance sources, `stackup` and `joint_fit` checks, allocation, `save`, the `floor` selector; then `auto` | Mac (maths anywhere) | Fixture `tests/fixtures/stacklab/` (housing, 608 envelope, cover): the numbers in §5.7, broken and non-closing chains, checks pass and fail, the release gate |
 | **M6.4 drawings** | Datums, frames, basic dimensions, size tolerances, surface symbols, balloons and their register, notes, `content_parts`, `read`, edit ops, layout room for symbols and balloons | Mac (GUI) | `tests/test_drawings.py`: every scheme item drawn and verified, balloon numbers stable across a regeneration (a new item takes the next number, a removed one retires its own), stale on a tolerance change, sheets without a scheme unchanged |
 | **M6.5 release** | README section, the inspection CSV numbered like the balloons, gates | Mac | `tests/test_assembly_release.py` additions: CSV rows = balloons on the shipped sheet |
 | **M6.6 evals and docs** | Eval cases `gdt_plate` (CNC adapter plate: datums from the mounting interface, flatness, floating M5 positions, H7 pilot ⟂ A with Ra 1.6, a ballooned sheet and its inspection CSV) and `bearing_stack` (end play by stack-up, tolerances allocated and on the drawings); README tool table; `design.md` status and implementation map | Mac + agents | Both cases pass their graders and rubric |
 
 M6.1 comes first because the spike draws the SVGs it generates; M6.4 waits
-for the spike's findings.
+for the spike's findings. M6.1 merges on its own, ahead of M6.2: its lookups mention only what the
+server does today, and M6.2 brings the `tolerances.json` guidance with the build
+support.
 
 ## 9. Risks
 
@@ -430,7 +432,7 @@ for the spike's findings.
 | 4 | Ⓔ on fits | Added automatically on parts with a scheme (ISO 14405-1); existing sheets unchanged (default adopted) |
 | 5 | Inspection | **Balloon numbers on the sheet and `<Part>_inspection.csv` in v1** |
 | 6 | Statistical default | Checks are worst case unless they say `rss`; RSS at ±3σ, Cp 1; Monte Carlo on request (default adopted) |
-| 7 | Scope of v1 | 1D stacks (axial and radial), the fastener rule, the 14 characteristics, single-line frames, **surface texture symbols (ISO 21920-1)**, balloons. Later: composite frames, 2D/3D vector loops, thermal expansion, STEP AP242 PMI, datum flags in the live viewer |
+| 7 | Scope of v1 | 1D stacks (axial and radial), the bolted-joint rule, the 14 characteristics, single-line frames, **surface texture symbols (ISO 21920-1)**, balloons. Later: composite frames, 2D/3D vector loops, thermal expansion, STEP AP242 PMI, datum flags in the live viewer |
 
 ## References
 
