@@ -167,7 +167,7 @@ def sketch_info(sk):
 
 def hole_summary(h):
     try:
-        n = len([g for g in h.Profile[0].Geometry if g.__class__.__name__ == "Circle"])
+        n = len(fc.hole_centres(h))              # pattern / mirror copies included
     except Exception:  # noqa: BLE001
         n = 0
     parts = ["%d×" % n if n else ""]
@@ -225,11 +225,14 @@ def hole_points(h):
         return None, None
 
 
+# datum and binder features: not listed among a body's features (exact type names: a prefix test would also
+# drop PartDesign::LinearPattern, which starts with PartDesign::Line)
+DATUM_TYPES = ("PartDesign::Plane", "PartDesign::Line", "PartDesign::Point", "PartDesign::CoordinateSystem",
+               "PartDesign::ShapeBinder", "PartDesign::SubShapeBinder")
+
+
 def body_features(b):
-    feats = [f for f in b.Group if f.TypeId.startswith("PartDesign::")
-             and not f.TypeId.startswith(("PartDesign::Plane", "PartDesign::Line", "PartDesign::Point",
-                                          "PartDesign::CoordinateSystem", "PartDesign::ShapeBinder",
-                                          "PartDesign::SubShapeBinder"))]
+    feats = [f for f in b.Group if f.TypeId.startswith("PartDesign::") and f.TypeId not in DATUM_TYPES]
     tip = b.Tip
     out = []
     for f in feats:

@@ -89,6 +89,61 @@ Round the edges selected with fc.edges(...) — do fillets last.
 
 Chamfer the edges selected with fc.edges(...) by `size` mm.
 
+### `fc.shell(bd, open_faces, thickness, inward=True, join='arc', name=None)`
+
+Hollow the body into walls `thickness` thick, leaving `open_faces`
+open (fc.face / fc.faces selections, combined with +): an enclosure
+from a solid block, a cup from a cylinder. inward=True keeps the outside
+size (the walls grow into the part); False keeps the inside size. join
+'arc' rounds the outside of convex edges, 'intersection' keeps them
+sharp. Checked after the recompute: the build warns if the walls went
+the wrong way and could not be turned round.
+
+### `fc.draft(bd, walls, angle, pull='+Z', neutral=None, name=None)`
+
+Taper `walls` (fc.faces(b, parallel="Z") and the like) by `angle`
+degrees so the part releases from a mould or die when pulled along
+`pull`. The walls keep their size on the neutral plane — a FaceRef or
+'XY'|'XZ'|'YZ' — by default the part's planar face facing away from the
+pull (its parting face). Checked after the recompute: every drafted wall
+must open towards `pull`; FreeCAD's direction is turned round if not,
+and the build warns if that does not fix it.
+
+## Feature patterns and mirrors
+
+### `fc.linear_pattern(bd, features, direction, n, spacing, name=None)`
+
+Repeat `features` n times (the original included) `spacing` mm apart
+along `direction` ('+X' … or a vector): ribs, slots, vent rows. Holes made
+by fc.holes keep their spec in reports, callouts and checks on every
+copy. A Param spacing stays bound to the spreadsheet. Repeating an
+earlier pattern (a grid from two rows) makes both one MultiTransform,
+which is returned.
+
+### `fc.polar_pattern(bd, features, n, angle=360.0, axis='Z', center=(0, 0), name=None)`
+
+Repeat `features` n times (the original included) around `axis`
+through `center` (2D in the plane square to the axis, or 3D): bolt
+circles of bosses, spokes, radial vents. angle=360 spaces them evenly
+all round; a smaller angle puts the last copy at that angle. Holes made
+by fc.holes keep their spec on every copy. Repeating an earlier pattern
+makes both one MultiTransform, which is returned.
+
+### `fc.mirror(bd, features, plane='YZ', at=0.0, name=None)`
+
+Mirror `features` across a plane: 'YZ' (x = at), 'XZ' (y = at), 'XY'
+(z = at), or a FaceRef (that face's plane). Model one side of a
+symmetric part and mirror it, so the halves cannot drift apart. Holes
+made by fc.holes keep their spec on the mirrored copies. Mirroring an
+earlier pattern makes both one MultiTransform, which is returned.
+
+### `fc.hole_centres(h)`
+
+Centres (global) of every hole a Hole feature makes: its sketch
+circles plus their copies made by fc.linear_pattern, fc.polar_pattern
+and fc.mirror (also a pattern of a pattern). Raises when the profile
+cannot be read.
+
 ## Turned parts
 
 ### `fc.turned(bd, sections, axis='Z', start=0.0, name='Turned')`
@@ -149,6 +204,19 @@ The planar face of obj facing `direction`. With several candidates the
 outermost one wins; `at` selects the plane offset along the direction and
 `contains` a point that must lie on the face.
 
+### `fc.faces(obj, facing=None, parallel=None, kind=None, at=None, axis='Z', tol=1e-06)`
+
+Faces of obj, filtered (all filters combine) — for fc.shell (the faces
+to open) and fc.draft (the faces to taper):
+  facing    planar faces whose outward normal points this way ('+Z' …):
+            every one, not only the outermost as fc.face picks
+  parallel  side walls along an axis ('Z'): planes whose normal is
+            square to it and cylinders / cones around it — the walls a
+            part pulled along Z needs draft on
+  kind      'plane' | 'cylinder' | 'cone'
+  at        faces lying entirely at coordinate `at` along `axis`
+Selections combine with +, and with fc.face(...).
+
 ### `fc.edges(obj, kind=None, parallel=None, on=None, r=None, at=None, axis='Z', tol=1e-06)`
 
 Edges of obj, filtered (all filters combine):
@@ -162,6 +230,26 @@ Edges of obj, filtered (all filters combine):
             edges in the plane x = -20.
 Selections combine with +: fc.edges(b, kind="circle", at=0) +
 fc.edges(b, kind="circle", at=34) chamfers both ends in one feature.
+
+## Standard hardware
+
+### `fc.fasteners(spec, on=None, at=(), offset=0.0, name=None, bom='buy', color=(0.33, 0.33, 0.36))`
+
+Standard hardware as real geometry, so fit checks, sections, renders and
+the BOM see it: spec 'ISO4762 M3x10' (socket head cap screw), 'ISO10642
+M4x12' (countersunk), 'ISO7380 M3x8' (button head), 'ISO4032 M3' (hex
+nut), 'ISO7089 M3' (washer); DIN 912 / 7991 / 934 / 125 read as their ISO
+equivalents. One fastener at each point of `at` on `on` (a FaceRef or
+'XY'|'XZ'|'YZ'; 2D points as fc.holes takes them), or at each Placement in
+`at` (local +Z out of the part) with on=None. Screws sit with the head's
+underside on the face (a countersunk head flush with it) and the shank
+going into the part; nuts and washers stand on the face. offset moves
+them along the face normal: -3.4 seats a socket head in a counterbore
+3.4 deep, +washer thickness lifts a screw onto a washer.
+Returns one reference part (bom='buy', qty = number placed, spec = order
+text; excluded from mass). Threads are modelled at the major Ø, so a
+screw overlaps its tapped hole or insert by design: list that pair in
+check_fit's interference_ok.
 
 ## Reference parts, frames and mates
 
@@ -252,7 +340,7 @@ direction (slider). Problems become build warnings.
 (position error mm, angle error deg) for a joint, measured between its
 two frames in global coordinates; None for grounded/unsupported joints.
 
-## Patterns
+## Point patterns (for at=)
 
 ### `fc.bolt_circle(pcd, n, start=0.0, center=(0, 0))`
 

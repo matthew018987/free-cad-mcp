@@ -378,9 +378,7 @@ def _hole_features(o):
                 thread, major = str(h.ThreadSize).replace("x", "×"), float(m.group(1))
         centres = None
         try:
-            sk = h.Profile[0]
-            pl = sk.getGlobalPlacement()
-            centres = [pl.multVec(g.Center) for g in sk.Geometry if g.__class__.__name__ == "Circle"]
+            centres = fc.hole_centres(h)            # sketch circles + pattern / mirror copies
         except Exception:  # noqa: BLE001
             pass
         out.append({"feature": h, "d": dia, "thread": thread, "major": major, "centres": centres,

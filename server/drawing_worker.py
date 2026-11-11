@@ -1672,9 +1672,7 @@ def hole_specs(part):
             continue
         centres = None
         try:
-            sk = h.Profile[0]
-            pl = sk.getGlobalPlacement()
-            centres = [pl.multVec(g.Center) for g in sk.Geometry if g.__class__.__name__ == "Circle"] or None
+            centres = fc.hole_centres(h) or None    # sketch circles + pattern / mirror copies
         except Exception:  # noqa: BLE001
             centres = None
         dia = h.Diameter.Value

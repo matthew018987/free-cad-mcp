@@ -154,8 +154,12 @@ decide based on that evidence, not on how a picture looks.
   of one thickness, holes ≥ the thickness; **bent sheet** (`sheet`) — build it
   with `fc.sheet_metal` (§6): inside radius ≥ t, flanges ≥ 3t + r, holes ≥
   2t + r from a bend.
-- Feature order: base shape → interfaces (holes, bosses, pockets) → stiffening
-  → cosmetic fillets and chamfers **last**.
+- Repeat and mirror features with `fc.linear_pattern` / `fc.polar_pattern` /
+  `fc.mirror` rather than redrawing them; hollow housings with `fc.shell`;
+  draft moulded walls (1–3°) with `fc.draft`; place bought screws, nuts and
+  washers with `fc.fasteners` and `check_fit` the stack-up (§6).
+- Feature order: base → interfaces (holes, bosses, pockets) → patterns /
+  mirrors → shell → draft → stiffening → fillets and chamfers **last**.
 - Build after each **feature group**, not after the whole part. A small step
   keeps the cause of a failure obvious.
 
@@ -410,7 +414,7 @@ fc.holes(body, on=fc.face(body, "+Z"), at=fc.rect_pattern(31, 31),
 fc.fillet(body, fc.edges(body, kind="line", parallel="Z"), P.r_out)   # last; chamfer(body, edges, size)
 motor = fc.ref_part("Motor", step="refs/nema17.step",          # or shape=Part.makeBox(...), STL/OBJ too
                     frames={"mount": fc.frame(0, 0, 0, normal="+Z")})          # bom="context" by default
-screws = fc.ref_part("Screws", shape=..., bom="buy", qty=8, spec="ISO 4762 M3×10")
+screws = fc.fasteners("ISO4762 M3x10", fc.face(body, "+Z"), pts, offset=-3.4)   # ISO geometry, bom="buy", qty=len(pts)
 fc.mate(motor, "mount", fc.frame_on(fc.face(body, "-Y"), at=(0, P.axis_z)), mode="against")
 fc.result(note=f"bore Ø{P.bore:g}")   # Params work in f-strings
 ```
@@ -420,9 +424,17 @@ fc.result(note=f"bore Ø{P.bore:g}")   # Params work in f-strings
 - `fc.face(obj, "+Z", at=offset, contains=point)` picks the outermost planar
   face facing that way. `fc.edges(obj, kind="line"|"circle", parallel="Z",
   r=…, on=face)` selects edges.
-- Patterns: `fc.rect_pattern(w, h, center)`, `fc.grid(nx, ny, px, py, center)`,
-  `fc.bolt_circle(pcd, n, start)`. A "31 mm square" hole pattern is
-  `rect_pattern(31, 31)`, **not** `bolt_circle(31, 4)`.
+- Point patterns (for `at=`): `fc.rect_pattern(w, h, center)`, `fc.grid(nx, ny,
+  px, py, center)`, `fc.bolt_circle(pcd, n, start)`. A "31 mm square" hole
+  pattern is `rect_pattern(31, 31)`, **not** `bolt_circle(31, 4)`.
+- Feature patterns (n includes the original; holes keep their spec on every
+  copy): `fc.linear_pattern(body, rib, "+X", 5, spacing=12)`,
+  `fc.polar_pattern(body, boss, 6, angle=360, axis="Z", center=(0, 0))`,
+  `fc.mirror(body, [boss, hole], "YZ", at=0)`. `fc.shell(body, fc.face(body,
+  "+Z"), 2)`, `fc.draft(body, fc.faces(body, parallel="Z"), 2, pull="+Z")`;
+  `fc.faces(obj, facing= | parallel= | kind=, at=)` selects several faces.
+- `fc.fasteners` (example above; also ISO10642 / ISO7380 / ISO4032 / ISO7089):
+  a screw in its tapped hole → `check_fit` `interference_ok`.
 - Hole specs: see §4. Standard tables are also available in scripts:
   `fc.std.clearance("M3", "normal")`, `fc.std.counterbore("M4")`,
   `fc.std.fit(8, "H7/g6")`, `fc.std.nut_trap("M3")`,

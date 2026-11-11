@@ -281,6 +281,54 @@ class EdgeRef:
         return "EdgeRef(%s %s)" % (self.obj.Name, ",".join(self.names))
 
 
+class FacesRef:
+    """Several faces of one feature, from fc.faces(...) — or fc.face(...)
+    results added together: fc.face(b, "+Z") + fc.face(b, "-X")."""
+
+    def __init__(self, obj, names):
+        self.obj, self.names = obj, list(names)
+
+    def __len__(self):
+        return len(self.names)
+
+    def __add__(self, other):
+        if isinstance(other, int) and other == 0:
+            return self
+        if isinstance(other, FaceRef):
+            other = FacesRef(other.obj, [other.name])
+        if not isinstance(other, FacesRef):
+            return NotImplemented
+        if (other.obj.Document.Name, other.obj.Name) != (self.obj.Document.Name, self.obj.Name):
+            raise FcError("cannot combine faces of %s and %s — select both from the same body after its last "
+                          "feature" % (self.obj.Label, other.obj.Label))
+        return FacesRef(self.obj, self.names + [n for n in other.names if n not in self.names])
+
+    __radd__ = __add__
+
+    def __repr__(self):
+        return "FacesRef(%s %s)" % (self.obj.Name, ",".join(self.names))
+
+
+def _face_add(self, other):
+    return FacesRef(self.obj, [self.name]) + other
+
+
+FaceRef.__add__ = _face_add
+FaceRef.__radd__ = _face_add
+
+
+def _faces_arg(ref, what):
+    """(feature, [FaceN …]) from a FaceRef, a FacesRef or a list of them."""
+    if isinstance(ref, (list, tuple)):
+        ref = sum(ref, 0) if ref else None
+    if isinstance(ref, FaceRef):
+        ref = FacesRef(ref.obj, [ref.name])
+    if not isinstance(ref, FacesRef) or not ref.names:
+        raise FcError("%s: select faces with fc.face(...) or fc.faces(...) (combine them with +), got %r"
+                      % (what, ref))
+    return ref.obj, list(ref.names)
+
+
 def _fmtv(v):
     return "(%.3g, %.3g, %.3g)" % (v.x, v.y, v.z)
 
@@ -398,6 +446,57 @@ def edges(obj, kind=None, parallel=None, on=None, r=None, at=None, axis="Z", tol
         raise FcError("no edges of %s match (kind=%s parallel=%s r=%s on=%s%s)"
                       % (obj.Label, kind, parallel, r, on, "" if at is None else " at=%g along %s" % (float(at), axis)))
     return EdgeRef(feat, names)
+
+
+def _face_normal(f):
+    u0, u1, v0, v1 = f.ParameterRange
+    return f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+
+
+def faces(obj, facing=None, parallel=None, kind=None, at=None, axis="Z", tol=1e-6):
+    """Faces of obj, filtered (all filters combine) — for fc.shell (the faces
+    to open) and fc.draft (the faces to taper):
+      facing    planar faces whose outward normal points this way ('+Z' …):
+                every one, not only the outermost as fc.face picks
+      parallel  side walls along an axis ('Z'): planes whose normal is
+                square to it and cylinders / cones around it — the walls a
+                part pulled along Z needs draft on
+      kind      'plane' | 'cylinder' | 'cone'
+      at        faces lying entirely at coordinate `at` along `axis`
+    Selections combine with +, and with fc.face(...)."""
+    feat = _feature(obj)
+    s = _shape_of(obj)
+    fd = _dir(facing) if facing is not None else None
+    pd = _dir(parallel) if parallel is not None else None
+    at_dir = _dir(axis) if at is not None else None
+    kinds = {"plane": "Plane", "cylinder": "Cylinder", "cone": "Cone"}
+    if kind is not None and kind not in kinds:
+        raise FcError("faces(kind=…) must be 'plane', 'cylinder' or 'cone', got %r" % (kind,))
+    names = []
+    for i, f in enumerate(s.Faces):
+        surf = f.Surface.__class__.__name__
+        if kind is not None and surf != kinds[kind]:
+            continue
+        if fd is not None and (surf != "Plane" or _face_normal(f).dot(fd) < 1 - 1e-6):
+            continue
+        if pd is not None:
+            if surf == "Plane":
+                if abs(_face_normal(f).dot(pd)) > 1e-6:
+                    continue
+            elif surf in ("Cylinder", "Cone"):
+                if abs(abs(f.Surface.Axis.dot(pd)) - 1) > 1e-6:
+                    continue
+            else:
+                continue
+        if at_dir is not None:
+            if any(abs(v.Point.dot(at_dir) - float(at)) > 1e-4 for v in f.Vertexes) or \
+                    abs(f.CenterOfMass.dot(at_dir) - float(at)) > 1e-4:
+                continue
+        names.append("Face%d" % (i + 1))
+    if not names:
+        raise FcError("no faces of %s match (facing=%s parallel=%s kind=%s%s)" % (
+            obj.Label, facing, parallel, kind, "" if at is None else " at=%g along %s" % (float(at), axis)))
+    return FacesRef(feat, names)
 
 
 # ------------------------------------------------------------------ bodies
@@ -753,6 +852,472 @@ def chamfer(bd, edge_ref, size, name=None):
     _set(f, "Size", size)
     _check(f)
     return f
+
+
+# ------------------------------------------------- shell, draft, patterns
+
+def _failed(feat):
+    st = list(feat.State)
+    return "Invalid" in st or "Error" in st or feat.Shape.isNull()
+
+
+def _grew(before, after, tol):
+    """after's bounding box reaches beyond before's by more than tol on any side."""
+    return (after.XMin < before.XMin - tol or after.YMin < before.YMin - tol or after.ZMin < before.ZMin - tol
+            or after.XMax > before.XMax + tol or after.YMax > before.YMax + tol or after.ZMax > before.ZMax + tol)
+
+
+def shell(bd, open_faces, thickness, inward=True, join="arc", name=None):
+    """Hollow the body into walls `thickness` thick, leaving `open_faces`
+    open (fc.face / fc.faces selections, combined with +): an enclosure
+    from a solid block, a cup from a cylinder. inward=True keeps the outside
+    size (the walls grow into the part); False keeps the inside size. join
+    'arc' rounds the outside of convex edges, 'intersection' keeps them
+    sharp. Checked after the recompute: the build warns if the walls went
+    the wrong way and could not be turned round."""
+    obj, names = _faces_arg(open_faces, "shell()")
+    t = float(thickness)
+    if not t > 0:
+        raise FcError("shell(): thickness must be > 0 mm, got %r" % (thickness,))
+    if join not in ("arc", "intersection"):
+        raise FcError("shell(): join must be 'arc' or 'intersection', got %r" % (join,))
+    before = obj.Shape.BoundBox
+    f = bd.newObject("PartDesign::Thickness", _safe_name(name or "Shell"))
+    if name:
+        f.Label = name
+    f.Base = (obj, names)
+    _set(f, "Value", thickness)
+    if "Join" in f.PropertiesList:
+        f.Join = "Arc" if join == "arc" else "Intersection"
+    f.Reversed = bool(inward)          # FreeCAD: Reversed = thickness inside the part
+    _check(f)
+    for attempt in (0, 1):
+        if _failed(f):
+            return f
+        grew = _grew(before, f.Shape.BoundBox, t / 2)
+        if grew != (not inward):
+            if attempt == 0:
+                f.Reversed = not f.Reversed
+                _check(f)
+                continue
+            warn("%s: the walls went %s although inward=%s was asked — check the shell in a section"
+                 % (f.Label, "outward" if grew else "inward", bool(inward)))
+        break
+    return f
+
+
+def _tilts(shape, pull, s, tol=2e-4):
+    """(faces tilted towards pull by sin = s, faces tilted away) — how drafted walls lean."""
+    pos = neg = 0
+    for fa in shape.Faces:
+        try:
+            a = _face_normal(fa).dot(pull)
+        except Exception:  # noqa: BLE001
+            continue
+        if abs(a - s) < tol:
+            pos += 1
+        elif abs(a + s) < tol:
+            neg += 1
+    return pos, neg
+
+
+def draft(bd, walls, angle, pull="+Z", neutral=None, name=None):
+    """Taper `walls` (fc.faces(b, parallel="Z") and the like) by `angle`
+    degrees so the part releases from a mould or die when pulled along
+    `pull`. The walls keep their size on the neutral plane — a FaceRef or
+    'XY'|'XZ'|'YZ' — by default the part's planar face facing away from the
+    pull (its parting face). Checked after the recompute: every drafted wall
+    must open towards `pull`; FreeCAD's direction is turned round if not,
+    and the build warns if that does not fix it."""
+    obj, names = _faces_arg(walls, "draft()")
+    ang = float(angle)
+    if not 0 < ang < 45:
+        raise FcError("draft(): angle must be between 0 and 45°, got %r (typical: 1–3° moulding, 0.5–1° casting "
+                      "cores)" % (angle,))
+    pd = _dir(pull)
+    s = math.sin(math.radians(ang))
+    p0, n0 = _tilts(obj.Shape, pd, s)
+    f = bd.newObject("PartDesign::Draft", _safe_name(name or "Draft"))
+    if name:
+        f.Label = name
+    f.Base = (obj, names)
+    _set(f, "Angle", angle)
+    if neutral is None:
+        neutral = face(obj, -pd)
+    if isinstance(neutral, FaceRef):
+        f.NeutralPlane = (neutral.obj, [neutral.name])
+    elif str(neutral).upper() in ("XY", "XZ", "YZ"):
+        f.NeutralPlane = (_origin_plane(bd, str(neutral).upper()), [""])
+    else:
+        raise FcError("draft(): neutral must be a FaceRef (fc.face(...)) or 'XY' | 'XZ' | 'YZ', got %r" % (neutral,))
+    _check(f)
+    for attempt in (0, 1):
+        if _failed(f):
+            return f
+        p1, n1 = _tilts(f.Shape, pd, s)
+        if p1 - p0 >= 1 and n1 - n0 <= 0:
+            break
+        if attempt == 0:
+            f.Reversed = not f.Reversed
+            _check(f)
+            continue
+        warn("%s: %d wall(s) open towards %s and %d against it after drafting — check the walls and the neutral "
+             "plane" % (f.Label, max(p1 - p0, 0), pull, max(n1 - n0, 0)))
+    return f
+
+
+def _features_arg(features, what):
+    fs = list(features) if isinstance(features, (list, tuple)) else [features]
+    if not fs:
+        raise FcError("%s: give the features to repeat (what fc.pad / fc.pocket / fc.holes … returned)" % what)
+    for x in fs:
+        if not hasattr(x, "TypeId") or not x.TypeId.startswith("PartDesign::") or x.TypeId == "PartDesign::Body":
+            raise FcError("%s: %r is not a PartDesign feature — pass what fc.pad / fc.pocket / fc.holes … returned"
+                          % (what, x))
+    return fs
+
+
+def _origin_axis(bd, which):
+    want = which + "_Axis"
+    for f in bd.Origin.OriginFeatures:
+        if f.Role == want or f.Name.startswith(want):
+            return f
+    raise FcError("body %s has no %s" % (bd.Label, want))
+
+
+def _axis_link(bd, u, point, label):
+    """(link, reversed): an origin axis when the line runs through the origin
+    along ±X/±Y/±Z, else a datum line at `point` along `u`."""
+    if Vector(point).Length < 1e-9:
+        for k, v in (("X", Vector(1, 0, 0)), ("Y", Vector(0, 1, 0)), ("Z", Vector(0, 0, 1))):
+            if abs(abs(u.dot(v)) - 1) < 1e-12:
+                return (_origin_axis(bd, k), [""]), u.dot(v) < 0
+    ln = bd.newObject("PartDesign::Line", _safe_name(label))
+    if "MapMode" in ln.PropertiesList:
+        ln.MapMode = "Deactivated"
+    ln.Placement = App.Placement(Vector(point), App.Rotation(Vector(0, 0, 1), u))
+    return (ln, [""]), False
+
+
+def _point3(p, normal, what):
+    vals = _coords(p, what)
+    if len(vals) == 3:
+        return Vector(*vals)
+    comps = [0.0, 0.0, 0.0]
+    ax = _plane_axes(normal)
+    comps[ax[0]], comps[ax[1]] = vals
+    return Vector(*comps)
+
+
+def _mat_list(m):
+    return [m.A11, m.A12, m.A13, m.A14, m.A21, m.A22, m.A23, m.A24,
+            m.A31, m.A32, m.A33, m.A34, m.A41, m.A42, m.A43, m.A44]
+
+
+def _translation(v):
+    m = App.Matrix()
+    m.move(v)
+    return m
+
+
+def _rotation(axis_pt, u, deg):
+    return App.Placement(Vector(), App.Rotation(u, deg), Vector(axis_pt)).toMatrix()
+
+
+def _reflection(pt, n):
+    n = Vector(n).normalize()
+    d = 2 * Vector(pt).dot(n)
+    nn = [n.x, n.y, n.z]
+    r = [[(1.0 if i == j else 0.0) - 2 * nn[i] * nn[j] for j in range(3)] for i in range(3)]
+    return App.Matrix(r[0][0], r[0][1], r[0][2], d * n.x, r[1][0], r[1][1], r[1][2], d * n.y,
+                      r[2][0], r[2][1], r[2][2], d * n.z, 0, 0, 0, 1)
+
+
+def _inner_point(sol):
+    """A point inside solid sol: its centre of mass, else just inside a face."""
+    c = sol.CenterOfMass
+    if sol.isInside(c, 1e-6, False):
+        return c
+    for fa in sol.Faces:
+        u0, u1, v0, v1 = fa.ParameterRange
+        u, v = (u0 + u1) / 2, (v0 + v1) / 2
+        n, p = fa.normalAt(u, v), fa.valueAt(u, v)
+        for eps in (1e-3, -1e-3, 1e-2, -1e-2):          # either side: no reliance on face orientation
+            q = p - n * eps
+            if sol.isInside(q, 1e-7, False):
+                return q
+    return None
+
+
+def _probe(o):
+    """(point, removes): a point of the material feature o removed (or added),
+    in body coordinates, taken from the difference between o and the feature
+    before it; None when it cannot be told."""
+    base = getattr(o, "BaseFeature", None)
+    try:
+        after = o.Shape
+        before = base.Shape if base is not None and not base.Shape.isNull() else None
+        for removes, diff in ((True, before.cut(after) if before is not None else None),
+                              (False, after.cut(before) if before is not None else after)):
+            if diff is not None and diff.Solids:
+                sol = max(diff.Solids, key=lambda x: x.Volume)
+                if sol.Volume > 1e-6:
+                    q = _inner_point(sol)
+                    if q is not None:
+                        return q, removes
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _place_copies(f, feats, variants):
+    """Record on pattern f the copy transforms (body coordinates) that match
+    the recomputed geometry: variants are candidate transform lists (e.g. both
+    senses of rotation); the first whose copies all land is kept."""
+    if "FcTransforms" not in f.PropertiesList:
+        f.addProperty("App::PropertyString", "FcTransforms", "fclib",
+                      "copy transforms in body coordinates (JSON 4×4 row-major), for hole callouts")
+    if _failed(f):
+        f.FcTransforms = json.dumps([_mat_list(m) for m in variants[0]])
+        return
+    probes = [p for p in (_probe(o) for o in feats) if p]
+    chosen = None
+    for ms in variants:
+        if all(bool(f.Shape.isInside(m.multVec(c), 1e-6, True)) != removes for c, removes in probes for m in ms):
+            chosen = ms
+            break
+    if chosen is None:
+        chosen = variants[0]
+        if probes:
+            warn("%s: could not confirm where every copy landed — check it in a render (copies outside the part, "
+                 "or overlapping copies, add or remove nothing)" % f.Label)
+    f.FcTransforms = json.dumps([_mat_list(m) for m in chosen])
+
+
+def _pick_mode(f, keys):
+    """FreeCAD 1.1 patterns choose overall extent vs spacing with Mode: keep the overall one."""
+    if "Mode" in f.PropertiesList:
+        enums = f.getEnumerationsOfProperty("Mode")
+        for k in keys:                       # in priority order
+            for e in enums:
+                if k in e.lower():
+                    f.Mode = e
+                    return
+
+
+def _count(n, what):
+    try:
+        k = int(round(float(n)))
+    except (TypeError, ValueError):
+        k = 0
+    if k < 2 or abs(float(n) - k) > 1e-9:
+        raise FcError("%s: n must be a whole number ≥ 2 (copies including the original), got %r" % (what, n))
+    return k
+
+
+_TRANSFORMED = ("PartDesign::LinearPattern", "PartDesign::PolarPattern", "PartDesign::Mirrored",
+                "PartDesign::MultiTransform")
+
+
+def _into_chain(bd, f):
+    """Make the pattern or mirror f a solid feature of body bd. FreeCAD 1.x takes a transformed
+    feature with no Originals yet, as body.newObject creates it, for a MultiTransform step: the body
+    neither links its BaseFeature nor makes it the Tip, so the body's shape leaves the copies out.
+    Re-adding it once its Originals are set puts it in the chain (nothing changes when it is the Tip)."""
+    if bd.Tip == f:
+        return
+    try:
+        bd.removeObject(f)
+        bd.addObject(f)
+    except Exception as e:  # noqa: BLE001
+        warn("%s: could not put it in body %s's feature chain (%s)" % (f.Label, bd.Label, e))
+    if bd.Tip != f and f in bd.Group:
+        try:
+            bd.Tip = f                          # as FreeCAD's own pattern commands do
+        except Exception:  # noqa: BLE001
+            pass
+    if bd.Tip != f:
+        warn("%s is not the tip of body %s, so the body's shape leaves its copies out" % (f.Label, bd.Label))
+
+
+def _transform(bd, fs, make, variants, default, what, name):
+    """A pattern or mirror of the features fs: make(label) creates the transformed feature with its own
+    settings, variants are the candidate copy transforms (_place_copies). An earlier fclib pattern or
+    mirror in fs becomes a step of one MultiTransform with the new one (_stack)."""
+    if any(x.TypeId in _TRANSFORMED for x in fs):
+        if len(fs) != 1:
+            raise FcError("%s: repeat either features or one earlier pattern, not both" % what)
+        return _stack(bd, fs[0], make, variants, default, what, name)
+    f = make(name or default)
+    if name:
+        f.Label = name
+    f.Originals = fs
+    _into_chain(bd, f)
+    _check(f)
+    _place_copies(f, fs, variants)
+    return f
+
+
+def _stack(bd, prev, make, variants, default, what, name):
+    """A pattern of an earlier fclib pattern or mirror. FreeCAD transforms only additive and subtractive
+    features, so both become the steps of one MultiTransform, each step repeating every copy made before
+    it; a MultiTransform made this way just gains a step. Returns the MultiTransform."""
+    if "FcTransforms" not in prev.PropertiesList:
+        raise FcError("%s: %s was not made by fclib, so its copies are not known: repeat its original features "
+                      "instead" % (what, prev.Label))
+    if bd.Tip != prev:
+        raise FcError("%s: %s is no longer the last feature of body %s (the tip is %s): repeat it right after "
+                      "making it, or repeat its original features" % (what, prev.Label, bd.Label,
+                                                                       bd.Tip.Label if bd.Tip else "none"))
+    done = [App.Matrix()] + [App.Matrix(*v) for v in json.loads(prev.FcTransforms or "[]")]
+    if prev.TypeId == "PartDesign::MultiTransform":
+        mt, originals, steps = prev, list(prev.Originals), list(prev.Transformations)
+    else:
+        originals, steps = list(prev.Originals), [prev]
+        mt = bd.newObject("PartDesign::MultiTransform", _safe_name((name or default) + "Multi"))
+        prev.Originals = []                     # the earlier pattern becomes the first step
+    steps.append(make((name or default) + "_step"))
+    mt.Originals = originals
+    mt.Transformations = steps
+    if name:
+        mt.Label = name
+    _into_chain(bd, mt)
+    _check(mt)
+    _place_copies(mt, originals, [[s * m for s in [App.Matrix()] + ms for m in done][1:] for ms in variants])
+    return mt
+
+
+def linear_pattern(bd, features, direction, n, spacing, name=None):
+    """Repeat `features` n times (the original included) `spacing` mm apart
+    along `direction` ('+X' … or a vector): ribs, slots, vent rows. Holes made
+    by fc.holes keep their spec in reports, callouts and checks on every
+    copy. A Param spacing stays bound to the spreadsheet. Repeating an
+    earlier pattern (a grid from two rows) makes both one MultiTransform,
+    which is returned."""
+    fs = _features_arg(features, "linear_pattern()")
+    k = _count(n, "linear_pattern()")
+    sp = float(spacing)
+    if not sp > 0:
+        raise FcError("linear_pattern(): spacing must be > 0 mm — use direction '-X' … to go the other way")
+    u = _dir(direction)
+
+    def make(label):
+        f = bd.newObject("PartDesign::LinearPattern", _safe_name(label))
+        link, rev = _axis_link(bd, u, Vector(), label + "_Dir")
+        f.Direction = link
+        f.Reversed = rev
+        _pick_mode(f, ("overall", "extent", "length"))
+        f.Occurrences = k
+        f.Length = sp * (k - 1)
+        if isinstance(spacing, Param):
+            f.setExpression("Length", "Params.%s * %d" % (spacing.name, k - 1))
+        if isinstance(n, Param):
+            f.setExpression("Occurrences", "Params.%s" % n.name)
+        return f
+    return _transform(bd, fs, make, [[_translation(u * (sp * i)) for i in range(1, k)],
+                                     [_translation(u * (-sp * i)) for i in range(1, k)]],
+                      "LinearPattern", "linear_pattern()", name)
+
+
+def polar_pattern(bd, features, n, angle=360.0, axis="Z", center=(0, 0), name=None):
+    """Repeat `features` n times (the original included) around `axis`
+    through `center` (2D in the plane square to the axis, or 3D): bolt
+    circles of bosses, spokes, radial vents. angle=360 spaces them evenly
+    all round; a smaller angle puts the last copy at that angle. Holes made
+    by fc.holes keep their spec on every copy. Repeating an earlier pattern
+    makes both one MultiTransform, which is returned."""
+    fs = _features_arg(features, "polar_pattern()")
+    k = _count(n, "polar_pattern()")
+    a = float(angle)
+    if not 0 < a <= 360:
+        raise FcError("polar_pattern(): angle must be in (0, 360]°, got %r" % (angle,))
+    u = _dir(axis)
+    c = _point3(center, u, "polar_pattern(center=…)")
+    c = c - u * c.dot(u)
+    full = abs(a - 360) < 1e-9
+    step = a / k if full else a / (k - 1)
+
+    def make(label):
+        f = bd.newObject("PartDesign::PolarPattern", _safe_name(label))
+        link, rev = _axis_link(bd, u, c, label + "_Axis")
+        f.Axis = link
+        f.Reversed = rev
+        _pick_mode(f, ("overall", "extent", "angle"))
+        f.Occurrences = k
+        _set(f, "Angle", angle)
+        if isinstance(n, Param):
+            f.setExpression("Occurrences", "Params.%s" % n.name)
+        return f
+    return _transform(bd, fs, make, [[_rotation(c, u, step * i) for i in range(1, k)],
+                                     [_rotation(c, u, -step * i) for i in range(1, k)]],
+                      "PolarPattern", "polar_pattern()", name)
+
+
+def mirror(bd, features, plane="YZ", at=0.0, name=None):
+    """Mirror `features` across a plane: 'YZ' (x = at), 'XZ' (y = at), 'XY'
+    (z = at), or a FaceRef (that face's plane). Model one side of a
+    symmetric part and mirror it, so the halves cannot drift apart. Holes
+    made by fc.holes keep their spec on the mirrored copies. Mirroring an
+    earlier pattern makes both one MultiTransform, which is returned."""
+    fs = _features_arg(features, "mirror()")
+    if isinstance(plane, FaceRef):
+        nrm, pt = Vector(plane.normal), Vector(plane.center)
+    elif str(plane).upper() in ("XY", "XZ", "YZ"):
+        nrm = {"XY": Vector(0, 0, 1), "XZ": Vector(0, 1, 0), "YZ": Vector(1, 0, 0)}[str(plane).upper()]
+        pt = nrm * float(at)
+    else:
+        raise FcError("mirror(): plane must be 'XY' | 'XZ' | 'YZ' (with at=…) or a FaceRef, got %r" % (plane,))
+
+    def make(label):
+        f = bd.newObject("PartDesign::Mirrored", _safe_name(label))
+        if not isinstance(plane, FaceRef) and abs(float(at)) < 1e-12:
+            f.MirrorPlane = (_origin_plane(bd, str(plane).upper()), [""])
+        else:
+            dp = bd.newObject("PartDesign::Plane", _safe_name(label + "_Plane"))
+            if "MapMode" in dp.PropertiesList:
+                dp.MapMode = "Deactivated"
+            dp.Placement = App.Placement(pt, App.Rotation(Vector(0, 0, 1), nrm))
+            f.MirrorPlane = (dp, [""])
+        return f
+    return _transform(bd, fs, make, [[_reflection(pt, nrm)]], "Mirrored", "mirror()", name)
+
+
+def hole_centres(h):
+    """Centres (global) of every hole a Hole feature makes: its sketch
+    circles plus their copies made by fc.linear_pattern, fc.polar_pattern
+    and fc.mirror (also a pattern of a pattern). Raises when the profile
+    cannot be read."""
+    sk = h.Profile[0]
+    pl = sk.getGlobalPlacement()
+    base = [pl.multVec(g.Center) for g in sk.Geometry if g.__class__.__name__ == "Circle"]
+    body = h.getParentGeoFeatureGroup()
+    if body is None or body.TypeId != "PartDesign::Body":
+        return base
+    mats = _copies(body, h)
+    if len(mats) == 1:
+        return base
+    bg = body.getGlobalPlacement().toMatrix()
+    bi = bg.inverse()
+    return [bg.multVec(m.multVec(bi.multVec(c))) for m in mats for c in base]
+
+
+def _copies(body, feat, depth=0):
+    """Transforms (body coordinates, identity first) at which feat's tool appears."""
+    out = [App.Matrix()]
+    if depth > 8:
+        return out
+    for f in body.Group:
+        if "FcTransforms" not in f.PropertiesList or feat not in (getattr(f, "Originals", None) or []):
+            continue
+        try:
+            ts = [App.Matrix(*v) for v in json.loads(f.FcTransforms or "[]")]
+        except (TypeError, ValueError):
+            continue
+        later = _copies(body, f, depth + 1)          # f itself repeated by a later pattern
+        out += later[1:]                             # …carries feat's own instance along
+        for m in later:
+            out += [m * t for t in ts]
+    return out
 
 
 def _check(feat):
@@ -1166,6 +1731,108 @@ def set_color(obj, rgb):
     if "FcColor" not in obj.PropertiesList:
         obj.addProperty("App::PropertyString", "FcColor", "fclib", "render colour r,g,b 0..1")
     obj.FcColor = ",".join("%g" % c for c in vals)
+
+
+# ------------------------------------------------------- standard hardware
+
+def _hex_prism(s, h, z0=0.0):
+    """A hexagonal prism, `s` across flats, from z0 up h (a corner on +X)."""
+    r = s / math.sqrt(3)
+    pts = [Vector(r * math.cos(math.radians(60 * i)), r * math.sin(math.radians(60 * i)), z0) for i in range(6)]
+    return Part.Face(Part.makePolygon(pts + [pts[0]])).extrude(Vector(0, 0, h))
+
+
+def _fastener_shape(info):
+    """The fastener in its seat frame: z = 0 on the seat face, +Z out of the
+    part. A screw's head sits on z = 0 (a countersunk head's top is flush with
+    it) and its shank runs down -Z; nuts and washers stand on z = 0 along +Z.
+    Threads at the major Ø (cosmetic)."""
+    d = info["d"]
+    std = info["standard"]
+    if info["kind"] == "screw":
+        L, dk, k, s = info["l"], info["dk"], info["k"], info["s"]
+        if std == "ISO 10642":
+            head = Part.makeCone(d / 2, dk / 2, k, Vector(0, 0, -k))
+            shank = Part.makeCylinder(d / 2, L - k, Vector(0, 0, -L))
+            top, t = 0.0, 0.6 * k
+        else:
+            if std == "ISO 7380":
+                a = dk / 2
+                R = (a * a + k * k) / (2 * k)
+                head = Part.makeSphere(R, Vector(0, 0, k - R)).common(Part.makeCylinder(a, k))
+                t = 0.6 * k
+            else:
+                head = Part.makeCylinder(dk / 2, k)
+                t = 0.5 * k
+            shank = Part.makeCylinder(d / 2, L, Vector(0, 0, -L))
+            top = k
+        sol = head.fuse(shank).cut(_hex_prism(s, t + 1.0, top - t))
+    elif info["kind"] == "nut":
+        sol = _hex_prism(info["s"], info["m"]).cut(Part.makeCylinder(d / 2, info["m"] + 2, Vector(0, 0, -1)))
+    else:
+        h = info["h"]
+        sol = Part.makeCylinder(info["d2"] / 2, h).cut(Part.makeCylinder(info["d1"] / 2, h + 2, Vector(0, 0, -1)))
+    try:
+        sol = sol.removeSplitter()
+    except Exception:  # noqa: BLE001
+        pass
+    return sol
+
+
+def fasteners(spec, on=None, at=(), offset=0.0, name=None, bom="buy", color=(0.33, 0.33, 0.36)):
+    """Standard hardware as real geometry, so fit checks, sections, renders and
+    the BOM see it: spec 'ISO4762 M3x10' (socket head cap screw), 'ISO10642
+    M4x12' (countersunk), 'ISO7380 M3x8' (button head), 'ISO4032 M3' (hex
+    nut), 'ISO7089 M3' (washer); DIN 912 / 7991 / 934 / 125 read as their ISO
+    equivalents. One fastener at each point of `at` on `on` (a FaceRef or
+    'XY'|'XZ'|'YZ'; 2D points as fc.holes takes them), or at each Placement in
+    `at` (local +Z out of the part) with on=None. Screws sit with the head's
+    underside on the face (a countersunk head flush with it) and the shank
+    going into the part; nuts and washers stand on the face. offset moves
+    them along the face normal: -3.4 seats a socket head in a counterbore
+    3.4 deep, +washer thickness lifts a screw onto a washer.
+    Returns one reference part (bom='buy', qty = number placed, spec = order
+    text; excluded from mass). Threads are modelled at the major Ø, so a
+    screw overlaps its tapped hole or insert by design: list that pair in
+    check_fit's interference_ok."""
+    try:
+        info = standards.fastener(spec)
+    except ValueError as e:
+        raise FcError("fasteners(): %s" % e)
+    pts = list(at) if isinstance(at, (list, tuple)) else [at]
+    if not pts:
+        raise FcError("fasteners(): `at` is empty")
+    pls = []
+    for p in pts:
+        if isinstance(p, App.Placement):
+            pl = App.Placement(p)
+        elif isinstance(on, FaceRef):
+            pl = frame_on(on, p)
+        elif str(on).upper() in ("XY", "XZ", "YZ"):
+            nrm = {"XY": "+Z", "XZ": "+Y", "YZ": "+X"}[str(on).upper()]
+            q = _point3(p, _dir(nrm), "fasteners(at=…)")
+            pl = frame(q.x, q.y, q.z, normal=nrm)
+        else:
+            raise FcError("fasteners(): `on` must be a FaceRef (fc.face(...)) or 'XY' | 'XZ' | 'YZ' — or give "
+                          "Placements in `at` with on=None — got %r" % (on,))
+        pls.append(pl.multiply(App.Placement(Vector(0, 0, float(offset)), App.Rotation())))
+    solid = _fastener_shape(info)
+    shapes = []
+    for pl in pls:
+        s = solid.copy()
+        s.transformShape(pl.toMatrix())
+        shapes.append(s)
+    label = name or "%s_%s" % (info["standard"].replace(" ", ""), info["size"] + ("x%g" % info["l"] if info.get("l")
+                                                                                    else ""))
+    o = ref_part(label, shape=Part.makeCompound(shapes), bom=bom, qty=len(pls), spec=info["spec"], color=color)
+    o.addProperty("App::PropertyString", "FcFastener", "fclib", "standard fastener (JSON)")
+    rec = {k: info[k] for k in ("standard", "kind", "size", "d", "pitch", "spec") if k in info}
+    rec.update(l=info.get("l"), count=len(pls))
+    o.FcFastener = json.dumps(rec)
+    set_frames(o, {"seat%d" % i: pl for i, pl in enumerate(pls)})
+    for n in info["notes"]:
+        warn("%s: %s" % (o.Label, n))
+    return o
 
 
 def frame(x=0.0, y=0.0, z=0.0, normal="+Z", xdir=None):
