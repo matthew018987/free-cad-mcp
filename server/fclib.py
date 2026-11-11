@@ -1115,35 +1115,108 @@ def _count(n, what):
     return k
 
 
+_TRANSFORMED = ("PartDesign::LinearPattern", "PartDesign::PolarPattern", "PartDesign::Mirrored",
+                "PartDesign::MultiTransform")
+
+
+def _into_chain(bd, f):
+    """Make the pattern or mirror f a solid feature of body bd. FreeCAD 1.x takes a transformed
+    feature with no Originals yet, as body.newObject creates it, for a MultiTransform step: the body
+    neither links its BaseFeature nor makes it the Tip, so the body's shape leaves the copies out.
+    Re-adding it once its Originals are set puts it in the chain (nothing changes when it is the Tip)."""
+    if bd.Tip == f:
+        return
+    try:
+        bd.removeObject(f)
+        bd.addObject(f)
+    except Exception as e:  # noqa: BLE001
+        warn("%s: could not put it in body %s's feature chain (%s)" % (f.Label, bd.Label, e))
+    if bd.Tip != f and f in bd.Group:
+        try:
+            bd.Tip = f                          # as FreeCAD's own pattern commands do
+        except Exception:  # noqa: BLE001
+            pass
+    if bd.Tip != f:
+        warn("%s is not the tip of body %s, so the body's shape leaves its copies out" % (f.Label, bd.Label))
+
+
+def _transform(bd, fs, make, variants, default, what, name):
+    """A pattern or mirror of the features fs: make(label) creates the transformed feature with its own
+    settings, variants are the candidate copy transforms (_place_copies). An earlier fclib pattern or
+    mirror in fs becomes a step of one MultiTransform with the new one (_stack)."""
+    if any(x.TypeId in _TRANSFORMED for x in fs):
+        if len(fs) != 1:
+            raise FcError("%s: repeat either features or one earlier pattern, not both" % what)
+        return _stack(bd, fs[0], make, variants, default, what, name)
+    f = make(name or default)
+    if name:
+        f.Label = name
+    f.Originals = fs
+    _into_chain(bd, f)
+    _check(f)
+    _place_copies(f, fs, variants)
+    return f
+
+
+def _stack(bd, prev, make, variants, default, what, name):
+    """A pattern of an earlier fclib pattern or mirror. FreeCAD transforms only additive and subtractive
+    features, so both become the steps of one MultiTransform, each step repeating every copy made before
+    it; a MultiTransform made this way just gains a step. Returns the MultiTransform."""
+    if "FcTransforms" not in prev.PropertiesList:
+        raise FcError("%s: %s was not made by fclib, so its copies are not known: repeat its original features "
+                      "instead" % (what, prev.Label))
+    if bd.Tip != prev:
+        raise FcError("%s: %s is no longer the last feature of body %s (the tip is %s): repeat it right after "
+                      "making it, or repeat its original features" % (what, prev.Label, bd.Label,
+                                                                       bd.Tip.Label if bd.Tip else "none"))
+    done = [App.Matrix()] + [App.Matrix(*v) for v in json.loads(prev.FcTransforms or "[]")]
+    if prev.TypeId == "PartDesign::MultiTransform":
+        mt, originals, steps = prev, list(prev.Originals), list(prev.Transformations)
+    else:
+        originals, steps = list(prev.Originals), [prev]
+        mt = bd.newObject("PartDesign::MultiTransform", _safe_name((name or default) + "Multi"))
+        prev.Originals = []                     # the earlier pattern becomes the first step
+    steps.append(make((name or default) + "_step"))
+    mt.Originals = originals
+    mt.Transformations = steps
+    if name:
+        mt.Label = name
+    _into_chain(bd, mt)
+    _check(mt)
+    _place_copies(mt, originals, [[s * m for s in [App.Matrix()] + ms for m in done][1:] for ms in variants])
+    return mt
+
+
 def linear_pattern(bd, features, direction, n, spacing, name=None):
     """Repeat `features` n times (the original included) `spacing` mm apart
     along `direction` ('+X' … or a vector): ribs, slots, vent rows. Holes made
     by fc.holes keep their spec in reports, callouts and checks on every
-    copy. A Param spacing stays bound to the spreadsheet."""
+    copy. A Param spacing stays bound to the spreadsheet. Repeating an
+    earlier pattern (a grid from two rows) makes both one MultiTransform,
+    which is returned."""
     fs = _features_arg(features, "linear_pattern()")
     k = _count(n, "linear_pattern()")
     sp = float(spacing)
     if not sp > 0:
         raise FcError("linear_pattern(): spacing must be > 0 mm — use direction '-X' … to go the other way")
     u = _dir(direction)
-    f = bd.newObject("PartDesign::LinearPattern", _safe_name(name or "LinearPattern"))
-    if name:
-        f.Label = name
-    f.Originals = fs
-    link, rev = _axis_link(bd, u, Vector(), (name or "LinearPattern") + "_Dir")
-    f.Direction = link
-    f.Reversed = rev
-    _pick_mode(f, ("overall", "extent", "length"))
-    f.Occurrences = k
-    f.Length = sp * (k - 1)
-    if isinstance(spacing, Param):
-        f.setExpression("Length", "Params.%s * %d" % (spacing.name, k - 1))
-    if isinstance(n, Param):
-        f.setExpression("Occurrences", "Params.%s" % n.name)
-    _check(f)
-    _place_copies(f, fs, [[_translation(u * (sp * i)) for i in range(1, k)],
-                          [_translation(u * (-sp * i)) for i in range(1, k)]])
-    return f
+
+    def make(label):
+        f = bd.newObject("PartDesign::LinearPattern", _safe_name(label))
+        link, rev = _axis_link(bd, u, Vector(), label + "_Dir")
+        f.Direction = link
+        f.Reversed = rev
+        _pick_mode(f, ("overall", "extent", "length"))
+        f.Occurrences = k
+        f.Length = sp * (k - 1)
+        if isinstance(spacing, Param):
+            f.setExpression("Length", "Params.%s * %d" % (spacing.name, k - 1))
+        if isinstance(n, Param):
+            f.setExpression("Occurrences", "Params.%s" % n.name)
+        return f
+    return _transform(bd, fs, make, [[_translation(u * (sp * i)) for i in range(1, k)],
+                                     [_translation(u * (-sp * i)) for i in range(1, k)]],
+                      "LinearPattern", "linear_pattern()", name)
 
 
 def polar_pattern(bd, features, n, angle=360.0, axis="Z", center=(0, 0), name=None):
@@ -1151,7 +1224,8 @@ def polar_pattern(bd, features, n, angle=360.0, axis="Z", center=(0, 0), name=No
     through `center` (2D in the plane square to the axis, or 3D): bolt
     circles of bosses, spokes, radial vents. angle=360 spaces them evenly
     all round; a smaller angle puts the last copy at that angle. Holes made
-    by fc.holes keep their spec on every copy."""
+    by fc.holes keep their spec on every copy. Repeating an earlier pattern
+    makes both one MultiTransform, which is returned."""
     fs = _features_arg(features, "polar_pattern()")
     k = _count(n, "polar_pattern()")
     a = float(angle)
@@ -1162,29 +1236,29 @@ def polar_pattern(bd, features, n, angle=360.0, axis="Z", center=(0, 0), name=No
     c = c - u * c.dot(u)
     full = abs(a - 360) < 1e-9
     step = a / k if full else a / (k - 1)
-    f = bd.newObject("PartDesign::PolarPattern", _safe_name(name or "PolarPattern"))
-    if name:
-        f.Label = name
-    f.Originals = fs
-    link, rev = _axis_link(bd, u, c, (name or "PolarPattern") + "_Axis")
-    f.Axis = link
-    f.Reversed = rev
-    _pick_mode(f, ("overall", "extent", "angle"))
-    f.Occurrences = k
-    _set(f, "Angle", angle)
-    if isinstance(n, Param):
-        f.setExpression("Occurrences", "Params.%s" % n.name)
-    _check(f)
-    _place_copies(f, fs, [[_rotation(c, u, step * i) for i in range(1, k)],
-                          [_rotation(c, u, -step * i) for i in range(1, k)]])
-    return f
+
+    def make(label):
+        f = bd.newObject("PartDesign::PolarPattern", _safe_name(label))
+        link, rev = _axis_link(bd, u, c, label + "_Axis")
+        f.Axis = link
+        f.Reversed = rev
+        _pick_mode(f, ("overall", "extent", "angle"))
+        f.Occurrences = k
+        _set(f, "Angle", angle)
+        if isinstance(n, Param):
+            f.setExpression("Occurrences", "Params.%s" % n.name)
+        return f
+    return _transform(bd, fs, make, [[_rotation(c, u, step * i) for i in range(1, k)],
+                                     [_rotation(c, u, -step * i) for i in range(1, k)]],
+                      "PolarPattern", "polar_pattern()", name)
 
 
 def mirror(bd, features, plane="YZ", at=0.0, name=None):
     """Mirror `features` across a plane: 'YZ' (x = at), 'XZ' (y = at), 'XY'
     (z = at), or a FaceRef (that face's plane). Model one side of a
     symmetric part and mirror it, so the halves cannot drift apart. Holes
-    made by fc.holes keep their spec on the mirrored copies."""
+    made by fc.holes keep their spec on the mirrored copies. Mirroring an
+    earlier pattern makes both one MultiTransform, which is returned."""
     fs = _features_arg(features, "mirror()")
     if isinstance(plane, FaceRef):
         nrm, pt = Vector(plane.normal), Vector(plane.center)
@@ -1193,21 +1267,19 @@ def mirror(bd, features, plane="YZ", at=0.0, name=None):
         pt = nrm * float(at)
     else:
         raise FcError("mirror(): plane must be 'XY' | 'XZ' | 'YZ' (with at=…) or a FaceRef, got %r" % (plane,))
-    f = bd.newObject("PartDesign::Mirrored", _safe_name(name or "Mirrored"))
-    if name:
-        f.Label = name
-    f.Originals = fs
-    if not isinstance(plane, FaceRef) and abs(float(at)) < 1e-12:
-        f.MirrorPlane = (_origin_plane(bd, str(plane).upper()), [""])
-    else:
-        dp = bd.newObject("PartDesign::Plane", _safe_name((name or "Mirrored") + "_Plane"))
-        if "MapMode" in dp.PropertiesList:
-            dp.MapMode = "Deactivated"
-        dp.Placement = App.Placement(pt, App.Rotation(Vector(0, 0, 1), nrm))
-        f.MirrorPlane = (dp, [""])
-    _check(f)
-    _place_copies(f, fs, [[_reflection(pt, nrm)]])
-    return f
+
+    def make(label):
+        f = bd.newObject("PartDesign::Mirrored", _safe_name(label))
+        if not isinstance(plane, FaceRef) and abs(float(at)) < 1e-12:
+            f.MirrorPlane = (_origin_plane(bd, str(plane).upper()), [""])
+        else:
+            dp = bd.newObject("PartDesign::Plane", _safe_name(label + "_Plane"))
+            if "MapMode" in dp.PropertiesList:
+                dp.MapMode = "Deactivated"
+            dp.Placement = App.Placement(pt, App.Rotation(Vector(0, 0, 1), nrm))
+            f.MirrorPlane = (dp, [""])
+        return f
+    return _transform(bd, fs, make, [[_reflection(pt, nrm)]], "Mirrored", "mirror()", name)
 
 
 def hole_centres(h):

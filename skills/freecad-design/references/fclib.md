@@ -116,7 +116,9 @@ and the build warns if that does not fix it.
 Repeat `features` n times (the original included) `spacing` mm apart
 along `direction` ('+X' … or a vector): ribs, slots, vent rows. Holes made
 by fc.holes keep their spec in reports, callouts and checks on every
-copy. A Param spacing stays bound to the spreadsheet.
+copy. A Param spacing stays bound to the spreadsheet. Repeating an
+earlier pattern (a grid from two rows) makes both one MultiTransform,
+which is returned.
 
 ### `fc.polar_pattern(bd, features, n, angle=360.0, axis='Z', center=(0, 0), name=None)`
 
@@ -124,14 +126,16 @@ Repeat `features` n times (the original included) around `axis`
 through `center` (2D in the plane square to the axis, or 3D): bolt
 circles of bosses, spokes, radial vents. angle=360 spaces them evenly
 all round; a smaller angle puts the last copy at that angle. Holes made
-by fc.holes keep their spec on every copy.
+by fc.holes keep their spec on every copy. Repeating an earlier pattern
+makes both one MultiTransform, which is returned.
 
 ### `fc.mirror(bd, features, plane='YZ', at=0.0, name=None)`
 
 Mirror `features` across a plane: 'YZ' (x = at), 'XZ' (y = at), 'XY'
 (z = at), or a FaceRef (that face's plane). Model one side of a
 symmetric part and mirror it, so the halves cannot drift apart. Holes
-made by fc.holes keep their spec on the mirrored copies.
+made by fc.holes keep their spec on the mirrored copies. Mirroring an
+earlier pattern makes both one MultiTransform, which is returned.
 
 ### `fc.hole_centres(h)`
 

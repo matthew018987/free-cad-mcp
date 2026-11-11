@@ -86,7 +86,7 @@ for o in b.Group:
     if o.TypeId == "PartDesign::Hole":
         cent += [[round(v.x, 3), round(v.y, 3), round(v.z, 3)] for v in fc.hole_centres(o)]
 fc.result(n=len(hs), names=names, centres=sorted(cent), at=sorted([round(h["point"].x, 3), round(h["point"].y, 3)]
-                                                                    for h in hs))
+                                                                    for h in hs), tip=b.Tip.Label)
 '''
 
 tmp = os.path.realpath(tempfile.mkdtemp(prefix="fcmcp-feat-"))
@@ -182,6 +182,7 @@ fc.linear_pattern(b, h, "+X", 5, 20)
     check("…5 holes detected, each matched to the Hole feature (keeps M3 tapped)", r.get("n") == 5
           and r.get("names") == ["Tap"] * 5, txt)
     check("…hole_centres at x = −40 … 40 step 20", [p[0] for p in r.get("centres", [])] == [-40, -20, 0, 20, 40], txt)
+    check("…the pattern is the body's tip, so the body's shape has the copies", r.get("tip") == "LinearPattern", txt)
 
     project("linpat_neg", '''b = fc.body("Rail")
 fc.pad(b, fc.sketch(b, "XY", fc.rect(100, 30)), 6)
@@ -243,6 +244,17 @@ fc.linear_pattern(b, row, "+Y", 2, 30, name="Rows")
     err2, txt2, r = probe(c, "patpat", HOLE_MATCH % "Grid")
     check("pattern of a pattern: 6 holes, 6 centres, all matched", not err and r.get("n") == 6
           and len(r.get("centres", [])) == 6 and r.get("names") == ["Vent"] * 6, (txt, txt2))
+    check("…both rows are steps of one MultiTransform, the body's tip", r.get("tip") == "Rows", txt2)
+
+    project("patpat_late", '''b = fc.body("Grid")
+fc.pad(b, fc.sketch(b, "XY", fc.rect(80, 50)), 4)
+h = fc.holes(b, fc.face(b, "+Z"), [(-30, -15)], "Ø3", name="Vent")
+row = fc.linear_pattern(b, h, "+X", 3, 30, name="Row")
+fc.pad(b, fc.sketch(b, fc.face(b, "+Z"), fc.circle(d=6, at=(0, 15))), 3, name="Boss")
+fc.linear_pattern(b, row, "+Y", 2, 30)
+''')
+    err, txt, _ = c.tool("build", {"project": "patpat_late", "views": []})
+    check("…a pattern that is no longer the body's tip is refused", "no longer the last feature" in txt, txt)
 
     project("pat_bad", '''b = fc.body("Rail")
 fc.pad(b, fc.sketch(b, "XY", fc.rect(100, 30)), 6)
