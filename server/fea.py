@@ -47,6 +47,7 @@ GRAVITY = 9810.0         # mm/s²
 CCX_TIMEOUT = 1800       # s per CalculiX run
 ANALYSES = ("static", "frequency", "buckling")
 DEFAULT_MODES = {"frequency": 6, "buckling": 3}
+LARGE_DEFLECTION = 0.05  # of the parts' longest dimension: above it a linear (small-deflection) result is approximate
 TITLES = {"static": "linear static", "frequency": "natural frequencies", "buckling": "linear buckling"}
 MAT_KEYS = ("name", "E", "nu", "yield", "density", "brittle", "source", "note")     # of a material, kept in a result
 MIN_JACOBIAN = 0.02      # scaled Jacobian below which a curved element counts as folded over (and is straightened)
@@ -1352,6 +1353,27 @@ def _finish_static(res, s_final, r1, r2, mlist, model):
     if res.get("max_stress_away") and res["max_stress"] > 1.3 * res["max_stress_away"]:
         res["notes"].append("the peak is at a support: a rigid fixture inflates the stress at its edge; away from "
                             "the supports the peak is %s MPa" % an.fmt(res["max_stress_away"], 3))
+    # A linear analysis holds for stresses below the strength and for small deflections. Outside that the
+    # numbers are not physical, and a check on them would pass on nothing.
+    over = []
+    for p in res.get("per_part") or [dict(res, part=res.get("part"), **{"yield": mlist[0]["yield"]})]:
+        stress = p.get("max_stress_away") if p.get("max_stress_away") is not None else p.get("max_stress")
+        if stress and stress > p["yield"]:
+            over.append("%s %s (%s MPa away from the supports, against %s %s MPa)" % (
+                p["part"], "breaks" if p.get("criterion") == "principal" else "yields", an.fmt(stress, 3),
+                _strength(p.get("criterion")), an.fmt(p["yield"], 0)))
+    res["beyond_yield"] = bool(over)
+    if over:
+        res["notes"].append("%s: past that the material no longer follows this linear analysis, so the stresses "
+                            "are not real and the deflection is larger than shown" % "; ".join(over))
+    bb = model.compound.BoundBox
+    span = max(bb.XLength, bb.YLength, bb.ZLength)
+    res["large_deflection"] = bool(res["max_disp"] > LARGE_DEFLECTION * span)
+    if res["large_deflection"]:
+        res["notes"].append("the largest displacement, %s mm, is %.0f %% of the longest dimension (%s mm): beyond "
+                            "small deflections a linear analysis is approximate, and too favourable where the part "
+                            "is in compression (check buckling)" % (
+                                an.fmt(res["max_disp"], 3), 100 * res["max_disp"] / span, an.fmt(span, 1)))
 
 
 def _finish_modes(res, r1, r2, kind, modes, case):

@@ -113,6 +113,14 @@ analyze(project="bracket", case="motor_load",
   supports. Only when the value is good enough as it is, set
   `"accept_unconverged": true` on the check: it then passes, and its value
   says "not converged (accepted)" in the build report and the release README.
+- **outside the linear range**: the analysis is linear, so it holds for
+  stresses below the material's strength and for small deflections. When
+  the stress away from the supports is above the strength the reply says the
+  part yields (or breaks): the stresses are then not real and the deflection
+  is larger than shown, and a `fea_displacement` check on that case fails.
+  When the largest displacement is over 5 % of the part's longest dimension
+  the reply says the result is approximate, and too favourable where the
+  part is in compression.
 - **deflect**: the largest displacement and its direction — compare with
   what the function can tolerate (a motor mount's misalignment, a shelf's
   sag).

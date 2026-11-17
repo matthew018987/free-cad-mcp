@@ -2175,6 +2175,12 @@ def fea_checks(pdir, project, checks, doc):
                 else:
                     conv, delta, what = r.get("converged_stress", r.get("converged")), ch.get("stress"), "peak stress"
                 ok, val, detail = _settled(c, ok, val, detail, conv, what, delta)
+                if t == "fea_displacement" and r.get("beyond_yield"):
+                    ok, val = False, val + ", beyond yield"
+                    detail += ("; the stress in this case is above the material's strength, so the real deflection "
+                               "is larger than this linear result")
+                if r.get("large_deflection"):
+                    detail += "; a large deflection, for which a linear analysis is approximate"
         except (ValueError, TypeError, KeyError, fea.FeaError) as e:
             detail = str(e)
         res.append({"id": cid, "type": t, "ok": ok, "value": val, "detail": detail})

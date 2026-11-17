@@ -287,6 +287,32 @@ def main():
     check("lookup_standard(material) says which materials are brittle", not err and "brittle: analyze judges it on "
           "its largest principal stress" in txt, txt)
 
+    print("outside the range of a linear analysis")
+    held = {"project": "beam", "fixed": ["Beam.face(-X)"]}
+    err, txt, _ = c.tool("analyze", dict(held, case="overload", loads=[
+        {"ref": "Beam.face(+X)", "force": 600, "direction": "-Z"}]))
+    over = result(pdir, "overload") if not err else {}
+    check("600 N: the beam yields away from the support, and the reply says its numbers are no longer real",
+          not err and over.get("beyond_yield") is True and over.get("large_deflection") is False
+          and "Beam yields (" in txt and "the deflection is larger than shown" in txt, txt)
+    err, txt, _ = c.tool("analyze", dict(held, case="soft", material="PETG", loads=[
+        {"ref": "Beam.face(+X)", "force": 30, "direction": "-Z"}]))
+    soft = result(pdir, "soft") if not err else {}
+    check("a PETG beam bent by 6 % of its length: a large deflection, for which the result is approximate",
+          not err and soft.get("large_deflection") is True and soft.get("beyond_yield") is False
+          and "is 6 % of the longest dimension (100.0 mm)" in txt, txt)
+    json.dump([{"id": "sag-over", "type": "fea_displacement", "case": "overload", "max": 10},
+               {"id": "sag-soft", "type": "fea_displacement", "case": "soft", "max": 10}],
+              open(os.path.join(pdir, "checks.json"), "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("a deflection check on a part that yields fails, however small the linear deflection",
+          re.search(r"✗ sag-over\s+fea_displacement\s+3\.\d+ mm \(≤ 10\.0000\), beyond yield", txt)
+          and "the real deflection is larger" in txt, txt)
+    check("…and one on a large deflection passes with the caveat", re.search(
+        r"✓ sag-soft\s+fea_displacement\s+5\.\d+ mm \(≤ 10\.0000\)   max displacement, case 'soft'; a large "
+        r"deflection", txt), txt)
+    json.dump([], open(os.path.join(pdir, "checks.json"), "w"))
+
     print("uniform pressure 0.1 MPa on the top face (w = 1 N/mm)")
     err, txt, _ = c.tool("analyze", {"project": "beam", "case": "press", "fixed": ["Beam.face(-X)"],
                                      "loads": [{"ref": "Beam.face(+Z)", "pressure": 0.1}]})
