@@ -164,6 +164,10 @@ def main():
     check("result.json has the evidence", res["case"] == "tip" and res["inputs_sha1"] and res["case_hash"]
           and abs(res["max_disp"] - d) < 1e-3 and res.get("analysis") == "static" and res.get("threads", 0) >= 1,
           res.keys())
+    check("…with the analysis method and the programs behind it, as the report says",
+          isinstance(res.get("method"), int) and (res.get("versions") or {}).get("calculix") and re.search(
+              r"solver    CalculiX [\d.]+, gmsh [\d.]+, FreeCAD [\d.]+ \(analysis method %s\)" % res.get("method"),
+              txt), (res.get("method"), res.get("versions"), txt))
     single = res["max_disp"]
     fj = json.load(open(os.path.join(pdir, "fea.json")))
     check("case saved in fea.json", fj["cases"]["tip"]["fixed"] == ["Beam.face(-X)"], fj)
@@ -383,6 +387,18 @@ def main():
           and re.search(r"✗ too-high\s+fea_frequency\s+8\d\d\.\d Hz \(≥ 1 ?000", txt), txt)
     check("fea_frequency on a static case → says it needs a frequency case",
           "case 'tip' is a static analysis — fea_frequency needs a frequency case" in txt, txt)
+    rp = os.path.join(pdir, "out", "fea", "tip", "result.json")
+    kept = open(rp).read()
+    old = json.loads(kept)
+    json.dump(dict(old, method=old["method"] - 1), open(rp, "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("a result from an older analysis method is stale", re.search(r"✗ strength\s+fea_safety\s+stale", txt)
+          and "analysis method" in txt and "analyze(case='tip')" in txt, txt)
+    json.dump(dict(old, versions=dict(old["versions"], calculix="0.1")), open(rp, "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("…and so is one solved by another CalculiX", re.search(r"✗ strength\s+fea_safety\s+stale", txt)
+          and "solved with CalculiX 0.1" in txt, txt)
+    open(rp, "w").write(kept)
     p = params(length=100, w=10, h=12)
     json.dump(p, open(os.path.join(pdir, "params.json"), "w"))
     json.dump([{"id": "strength", "type": "fea_safety", "case": "tip", "min": 3},

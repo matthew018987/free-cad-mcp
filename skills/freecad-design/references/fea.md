@@ -92,7 +92,10 @@ Put the requirement in `checks.json` against a saved case:
 ```
 A result counts for the build only while the part's geometry and the case
 (and material) are unchanged; otherwise the check fails as **stale** and
-names the case to re-run. `release` re-solves stale cases itself.
+names the case to re-run. `release` re-solves stale cases itself. A result
+also names the analysis method and the CalculiX and gmsh versions that
+produced it (the `solver` line), and goes stale when any of them changes: an
+update of this plugin or of FreeCAD re-solves the saved cases.
 
 **Bolted holes as supports**: a hole held as a rigid ring always shows a
 peak at its rim that grows with every mesh refinement — a modelling artefact

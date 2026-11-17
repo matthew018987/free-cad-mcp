@@ -35,6 +35,8 @@ from FreeCAD import Vector
 
 import analysis as an
 
+METHOD = 2               # version of the analysis method: raise it when the same case on the same geometry would
+                         # give different numbers, so that results from an older method go stale (1: no stamp)
 REFINE = 1.5             # finer mesh = size / REFINE
 MAX_ELEMENTS = 200000    # estimated elements: coarsen the first mesh above this (time, memory)
 AUTO_REFINE = 50000      # refine by default only while the first mesh has at most this many nodes
@@ -590,6 +592,57 @@ def _ccx_binary():
                    "preferences if you moved it")
 
 
+def _gmsh_binary():
+    """The gmsh FreeCAD's mesher runs: its FEM preference, else gmsh on PATH or beside FreeCAD."""
+    pref = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh").GetString("gmshBinaryPath", "")
+    for c in ([pref] if pref else []) + ["gmsh", "/Applications/Gmsh.app/Contents/MacOS/gmsh",
+                                         os.path.join(App.getHomePath(), "bin", "gmsh")]:
+        w = shutil.which(c)
+        if w:
+            return w
+    return None
+
+
+def _says(cmd, pattern):
+    """What a program prints for its version (the first group of pattern), or None."""
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(pattern, p.stdout.decode("utf-8", "replace"))
+    return m.group(1) if m else None
+
+
+_VERSIONS = None
+
+
+def versions():
+    """{calculix, gmsh, freecad}: the versions of the programs behind a result (None for one that
+    does not say)."""
+    global _VERSIONS
+    if _VERSIONS is None:
+        try:
+            ccx = _says([_ccx_binary(), "-v"], r"Version\s+([\w.]+)")
+        except FeaError:
+            ccx = None
+        gmsh = _gmsh_binary()
+        _VERSIONS = {"calculix": ccx, "gmsh": _says([gmsh, "--version"], r"(\d+\.\d+(?:\.\d+)*)") if gmsh else None,
+                     "freecad": ".".join(str(x) for x in App.Version()[:3])}
+    return dict(_VERSIONS)
+
+
+def outdated(res):
+    """Why a stored result no longer counts although its model and case are unchanged: another
+    version of the method, of CalculiX or of gmsh produced it. None while it is current."""
+    if res.get("method") != METHOD:
+        return "it comes from analysis method %s, now %s" % (res.get("method") or 1, METHOD)
+    now, then = versions(), res.get("versions") or {}
+    for k, name in (("calculix", "CalculiX"), ("gmsh", "gmsh")):
+        if now.get(k) and then.get(k) and now[k] != then[k]:
+            return "it was solved with %s %s, now %s" % (name, then[k], now[k])
+    return None
+
+
 def threads():
     return max(1, os.cpu_count() or 1)
 
@@ -892,7 +945,7 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
                                                                        "note")},
                fixed=s1["fixed"], loads=s1["loads"], applied=list(s1["applied"]), coarse=r1 if r2 else None,
                notes=notes, ccx_seconds=round(s1["ccx_seconds"] + (s_final["ccx_seconds"] if r2 else 0.0), 2),
-               threads=threads())
+               threads=threads(), method=METHOD, versions=versions())
     if len(model.parts) == 1:
         res["part"] = model.labels[0]
     else:
@@ -1050,6 +1103,10 @@ def report_lines(res, case_name):
         if res.get("change"):
             lines.append("converge  finer mesh changes the factor %.1f %% %s" % (
                 100 * res["change"]["factor"], "✓" if res.get("converged") else "✗ (see notes)"))
+    v = res.get("versions") or {}
+    lines.append("solver    %s (analysis method %s)" % (", ".join(
+        "%s %s" % (name, v[k]) for k, name in (("calculix", "CalculiX"), ("gmsh", "gmsh"), ("freecad", "FreeCAD"))
+        if v.get(k)) or "CalculiX", res.get("method", 1)))
     for n in res.get("notes") or []:
         lines.append("note      %s" % n)
     return lines

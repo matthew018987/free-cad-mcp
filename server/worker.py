@@ -2068,10 +2068,11 @@ FEA_KIND = {"fea_frequency": "frequency", "fea_buckling": "buckling"}       # th
 
 def fea_checks(pdir, project, checks, doc):
     """Checks on analysis results (out/fea/<case>/result.json). A result counts only
-    if it was solved for this geometry (geom_sig of each part in this build) and this
-    case and material (case_hash); otherwise the check fails as stale and names the
-    case to re-run. Static checks on a multi-part case judge every part (each against
-    its own yield) unless the check names one with part."""
+    if it was solved for this geometry (geom_sig of each part in this build), this
+    case and material (case_hash), and by this analysis method, CalculiX and gmsh
+    (fea.outdated); otherwise the check fails as stale and names the case to re-run.
+    Static checks on a multi-part case judge every part (each against its own yield)
+    unless the check names one with part."""
     lines, res, stale = [], [], []
     cases = (load_json(os.path.join(pdir, "fea.json"), {}) or {}).get("cases") or {}
     for c in checks:
@@ -2107,6 +2108,9 @@ def fea_checks(pdir, project, checks, doc):
             elif r.get("case_hash") != fea.result_hash(case, mats) or not current:
                 val, detail = "stale", ("the model or case changed since %s — run analyze(case='%s') "
                                         "(release re-runs it)" % (r.get("rev", "?"), name))
+                stale.append(name)
+            elif fea.outdated(r):
+                val, detail = "stale", "%s: run analyze(case='%s') (release re-runs it)" % (fea.outdated(r), name)
                 stale.append(name)
             elif kind == "frequency":
                 f1 = (r.get("frequencies_hz") or [0.0])[0]
