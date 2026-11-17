@@ -49,10 +49,12 @@ analyze(project="bracket", case="motor_load",
   meshes the same on every run. The `mesh` line ends with the worst
   element's scaled Jacobian (1 undistorted, 0 folded over); a note names
   badly distorted elements at curved faces, where the stress is less
-  accurate. The refined solve
-  (size/1.5, to show convergence) runs by default only when the first mesh
-  has ≤ 50 000 nodes — the reply says when it was skipped; `refine=true`
-  forces it (minutes and several GB on big meshes), `refine=false` skips it.
+  accurate. Every case is solved on two meshes to show convergence: the
+  first and a finer one (size/1.5), which is then the result. When the first
+  has more than 50 000 nodes the second is coarser instead (size × 1.5) and
+  the first stays the result, and the reply says so; `refine=true` forces
+  the finer one (minutes and several GB on big meshes). `refine=false`
+  solves once, for a quick look: checks on such a result fail.
 - The case is saved in `fea.json` under its name; `analyze(case="motor_load")`
   re-runs it. Failed cases are not saved; `save=false` keeps an exploratory
   case out of `fea.json`.
@@ -99,14 +101,18 @@ analyze(project="bracket", case="motor_load",
   checks name the criterion each part was judged on.
 - **principal**: the largest tension and the largest compression, and where.
   Tension across a print's layers is the direction it is weakest in.
-- **converge**: how much a finer mesh changes each result — displacement
-  (should change < 3 %), the peak stress and the stress away from the
-  supports, each marked ✓/✗ (frequency: f1 < 2 %; buckling: the factor
-  < 3 %). A `fea_*` check only carries a "not converged"
-  note for the quantity it checks. A peak stress that keeps rising is a
-  **singularity** —
+- **converge**: how much the finer of the two meshes changes each result —
+  displacement (should change < 3 %), the peak stress and the stress away
+  from the supports (< 10 %), each marked ✓/✗ (frequency: f1 < 2 %;
+  buckling: the factor < 3 %). A `fea_*` check **fails** when the quantity
+  it checks did not converge, or when the case was solved on one mesh only,
+  however far the value is inside its limit: an unconverged number is not
+  evidence. A peak stress that keeps rising is a **singularity** —
   a sharp internal corner, the edge of a rigid support, or a point-like
-  load. Add a fillet (and re-check), or judge the stress a little way off.
+  load. Add a fillet (and re-check), or judge the stress away from the
+  supports. Only when the value is good enough as it is, set
+  `"accept_unconverged": true` on the check: it then passes, and its value
+  says "not converged (accepted)" in the build report and the release README.
 - **deflect**: the largest displacement and its direction — compare with
   what the function can tolerate (a motor mount's misalignment, a shelf's
   sag).

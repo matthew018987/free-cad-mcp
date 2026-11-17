@@ -95,7 +95,8 @@ decide based on that evidence, not on how a picture looks.
     cones, fillets/corner radii = concave cylinders), `valid`
   - `fea_safety` (min), `fea_stress`, `fea_displacement` (max),
     `fea_frequency` (min Hz), `fea_buckling` (min factor) on a saved `analyze`
-    load case — stale when the geometry or the case changes
+    load case — stale when the geometry or the case changes, and failing
+    when the result has not converged
 - **Gate:** show the user the key dimensions and checks as a compact table and
   get a yes before detailed modelling. Skip this only for trivial parts, small
   edits to an existing model, or if they told you to go ahead.

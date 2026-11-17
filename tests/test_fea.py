@@ -204,21 +204,22 @@ def main():
           isinstance(res.get("method"), int) and (res.get("versions") or {}).get("calculix") and re.search(
               r"solver    CalculiX [\d.]+, gmsh [\d.]+, FreeCAD [\d.]+ \(analysis method %s\)" % res.get("method"),
               txt), (res.get("method"), res.get("versions"), txt))
-    check("principal stresses: the largest tension is on top of the cantilever and the largest compression below, equal in size",
+    check("principal stresses: the largest tension is on top of the cantilever and the largest compression below, "
+          "equal in size",
           res["max_principal_at"][2] > 9 and res["min_principal_at"][2] < 1
           and abs(res["max_principal"] + res["min_principal"]) < 0.15 * res["max_principal"]
           and re.search(r"principal largest tension [\d.]+ MPa at \(.*\) · largest compression -[\d.]+ MPa", txt)
           and res.get("criterion") == "von Mises" and res["max_stress"] == res["max_vm"], (res, txt))
     check("…and the mesh's worst element: the scaled Jacobian (1 is undistorted, 0 folded over)",
-          re.search(r"mesh      tet10, .* · scaled Jacobian ≥ 0\.\d+", txt)
+          re.search(r"mesh      tet10, .* · scaled Jacobian ≥ [01]\.\d+", txt)
           and res.get("mesh_quality", {}).get("min_jacobian", 0) > 0.3 and res["mesh_quality"]["straightened"] == 0,
           (res.get("mesh_quality"), txt))
     single = res["max_disp"]
     fj = json.load(open(os.path.join(pdir, "fea.json")))
     check("case saved in fea.json", fj["cases"]["tip"]["fixed"] == ["Beam.face(-X)"], fj)
 
-    err, txt2, _ = c.tool("analyze", {"project": "beam", "case": "tip", "refine": False})
-    check("saved case re-runs by name", not err and "case 'tip'" in txt2, txt2)
+    err, txt2, _ = c.tool("analyze", {"project": "beam", "case": "tip"})
+    check("saved case re-runs by name", not err and "case 'tip'" in txt2 and "converged ✓" in txt2, txt2)
     before = result(pdir, "tip")
     err, txt3, _ = c.tool("analyze", {"project": "beam", "case": "tip", "params": {"h": 14}, "refine": False})
     after = result(pdir, "tip")
@@ -236,7 +237,8 @@ def main():
            "loads": [{"ref": "Beam.face(+X)", "force": 100, "direction": "-Z"}]}
     err, txt, _ = c.tool("analyze", dict(tip, support_margin=12))
     sa12 = num(r"away from the supports: ([\d.]+) MPa", txt)
-    check("support_margin=12 moves it: M·c/I at x = 12 is 52.8 MPa", not err and sa12 and abs(sa12 - 52.8) / 52.8 < 0.02
+    check("support_margin=12 moves it: M·c/I at x = 12 is 52.8 MPa", not err and sa12
+          and abs(sa12 - 52.8) / 52.8 < 0.02
           and "(over 12.00 mm from a support)" in txt, txt)
     r12 = result(pdir, "margin") if not err else {}
     err, txt, _ = c.tool("analyze", dict(tip, support_margin=12))
@@ -355,11 +357,29 @@ def main():
                                      "loads": [{"ref": "Plate.face(+X)", "force": [0, 0, -20]}]})
     check("bolt holes as supports, vector force, equilibrium",
           not err and "Plate.holes(d=5.5)" in txt and "✓ in equilibrium" in txt and "5052" in txt, txt)
+    check("…the peak at the rim of a rigidly held hole keeps growing with the mesh; the stress away from the "
+          "holes and the sag have converged", re.search(r"peak stress \d+\.\d % ✗ · stress away from supports "
+                                                        r"\d\.\d % ✓", txt) and "displacement 0." in txt, txt)
     json.dump([{"id": "shank-gap", "type": "radial_gap", "a": "Plate.holes(d=5.5)", "b": "Screws.bosses(d=5)",
-                "min": 0.2}], open(os.path.join(ppd, "checks.json"), "w"))
+                "min": 0.2},
+               {"id": "rim", "type": "fea_stress", "max": 100},
+               {"id": "rim-accepted", "type": "fea_stress", "max": 100, "accept_unconverged": True},
+               {"id": "body", "type": "fea_safety", "min": 3, "away_from_supports": True},
+               {"id": "sag", "type": "fea_displacement", "max": 0.2}], open(os.path.join(ppd, "checks.json"), "w"))
     err, txt, _ = c.tool("build", {"project": "plate", "views": []})
     check("radial_gap against a pattern of shanks pairs each hole with its own", re.search(
         r"✓ shank-gap\s+radial_gap\s+0\.250", txt), txt)
+    check("a check on a stress that has not converged fails, however far inside its limit, and says what to do",
+          re.search(r"✗ rim\s+fea_stress\s+[\d.]+ MPa \(≤ 100\.000\), not converged", txt)
+          and "the peak stress changed" in txt and "away_from_supports" in txt and "accept_unconverged" in txt, txt)
+    check("…\"accept_unconverged\": true lets it pass, and the value says it was accepted",
+          re.search(r"✓ rim-accepted\s+fea_stress\s+[\d.]+ MPa \(≤ 100\.000\), not converged \(accepted\)", txt),
+          txt)
+    check("…checks on what did converge pass: the stress away from the supports and the displacement",
+          re.search(r"✓ body\s+fea_safety\s+[\d.]+ \(≥ 3\.00\)   max von Mises away", txt)
+          and re.search(r"✓ sag\s+fea_displacement\s+0\.\d+ mm \(≤ 0\.2000\)   max", txt), txt)
+    json.dump([{"id": "shank-gap", "type": "radial_gap", "a": "Plate.holes(d=5.5)", "b": "Screws.bosses(d=5)",
+                "min": 0.2}], open(os.path.join(ppd, "checks.json"), "w"))
     err, txt, _ = c.tool("check_fit", {"project": "plate", "contact_ok": ["Plate|Screws"], "render": False})
     check("contact_ok takes 'A|B' pairs as well as lists", not err, txt[:400])
     pj = json.load(open(os.path.join(ppd, "project.json")))
@@ -443,11 +463,12 @@ def main():
                                      "fixed": ["Lower.face(-X)"],
                                      "loads": [{"ref": "Upper.face(+X)", "force": 10, "direction": "-Z"}]})
     check("a load on a part outside the case → says to analyse them together", err and "parts=[" in txt, txt)
-    json.dump([{"id": "assy-strength", "type": "fea_safety", "case": "bonded", "min": 2},
+    json.dump([{"id": "assy-strength", "type": "fea_safety", "case": "bonded", "min": 2, "away_from_supports": True},
                {"id": "upper-sag", "type": "fea_displacement", "case": "bonded", "part": "Upper", "max": 0.5}],
               open(os.path.join(spd, "checks.json"), "w"))
     err, txt, _ = c.tool("build", {"project": "stack", "views": []})
-    check("multi-part fea checks: safety over every part passes, a part's sag over its limit fails",
+    check("multi-part fea checks: safety over every part (away from the supports) passes, a part's sag over its "
+          "limit fails",
           re.search(r"✓ assy-strength\s+fea_safety\s+\d\.\d\d \(≥ 2", txt)
           and re.search(r"✗ upper-sag\s+fea_displacement\s+0\.5\d+ mm \(≤ 0\.5", txt) and "in Upper" in txt, txt)
     json.dump(params(t_up=6), open(os.path.join(spd, "params.json"), "w"))
@@ -455,16 +476,19 @@ def main():
     check("changing one part of the assembly makes its result stale", "stale" in txt
           and "analyze(case='bonded')" in txt, txt)
 
-    print("speed: the refined solve is skipped when the first mesh is already large (F3)")
+    print("speed: a large first mesh is compared with a coarser one, not with a finer one (F3)")
     err, txt, _ = timed(c, "large first mesh (auto)", {"project": "beam", "case": "fine", "fixed": ["Beam.face(-X)"],
                                                        "loads": [{"ref": "Beam.face(+X)", "force": 100,
                                                                   "direction": "-Z"}],
                                                        "mesh_size": 1.0, "save": False})
-    nodes = num(r"refined solve skipped: ([\d ]+) nodes", txt)
-    check("…says so, with the node count and how to force it", not err and nodes and nodes > 50000
-          and "pass refine=true to force" in txt and "finer mesh changes" not in txt, txt)
+    nodes = num(r"a finer one than these ([\d ]+) nodes takes minutes", txt)
+    check("…says so, with the node counts and how to get the finer one", not err and nodes and nodes > 50000
+          and "convergence is shown against a coarser mesh (1.50 mm, " in txt and "refine=true solves it" in txt
+          and re.search(r"at 1\.00 mm \(also solved at 1\.50 mm: [\d ]+ nodes\)", txt), txt)
+    check("…and convergence is still shown: the 1 mm mesh against the 1.5 mm one", re.search(
+        r"converge  finer mesh changes displacement 0\.\d % ✓", txt), txt)
     d = num(r"max displacement ([\d.]+) mm", txt)
-    check("…and the single solve is still accurate (within 1 % of the converged tip deflection)",
+    check("…the result is accurate (within 1 % of the converged tip deflection)",
           d and abs(d - single) / single < 0.01, txt)
     sa1 = num(r"away from the supports: ([\d.]+) MPa", txt)
     check("…with the same stress away from the support (%s vs %s MPa): the zone comes from the part, not the mesh"
@@ -489,6 +513,20 @@ def main():
           and re.search(r"✗ too-high\s+fea_frequency\s+8\d\d\.\d Hz \(≥ 1 ?000", txt), txt)
     check("fea_frequency on a static case → says it needs a frequency case",
           "case 'tip' is a static analysis — fea_frequency needs a frequency case" in txt, txt)
+    err, txt, _ = c.tool("analyze", {"project": "beam", "case": "once", "fixed": ["Beam.face(-X)"], "refine": False,
+                                     "loads": [{"ref": "Beam.face(+X)", "force": 100, "direction": "-Z"}]})
+    check("refine=false solves one mesh and says its checks will fail", not err
+          and "solved on one mesh only (refine=false)" in txt and "converge  " not in txt, txt)
+    json.dump([{"id": "strength", "type": "fea_safety", "case": "tip", "min": 3},
+               {"id": "once", "type": "fea_safety", "case": "once", "min": 3},
+               {"id": "once-accepted", "type": "fea_safety", "case": "once", "min": 3, "accept_unconverged": True}],
+              open(os.path.join(pdir, "checks.json"), "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("a result solved on one mesh is no evidence: its check fails unless it accepts that",
+          re.search(r"✗ once\s+fea_safety\s+4\.\d+ \(≥ 3\.00\), not converged", txt)
+          and "solved on one mesh only" in txt and "Re-run it without refine=false" in txt
+          and re.search(r"✓ once-accepted\s+fea_safety\s+4\.\d+ \(≥ 3\.00\), not converged \(accepted\)", txt)
+          and re.search(r"✓ strength\s+fea_safety\s+4\.\d+ \(≥ 3\.00\)   max", txt), txt)
     rp = os.path.join(pdir, "out", "fea", "tip", "result.json")
     kept = open(rp).read()
     old = json.loads(kept)

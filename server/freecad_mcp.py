@@ -2777,8 +2777,9 @@ TOOLS = [
                     "\"density\": g/cm³} / a material name. The case is saved in fea.json under `case` "
                     "(default 'default') — re-run it by name; checks.json fea_safety / fea_stress / fea_displacement "
                     "(static), fea_frequency (first natural frequency ≥ min Hz) and fea_buckling (lowest positive "
-                    "buckling factor ≥ min) use the latest result and go stale when the model or case changes (release "
-                    "re-solves stale cases). Limits: linear elastic, small deflections, rigid supports, bonded faces "
+                    "buckling factor ≥ min) use the latest result, go stale when the model or case changes (release "
+                    "re-solves stale cases) and fail on a quantity that has not converged between the two meshes "
+                    "unless the check sets \"accept_unconverged\": true. Limits: linear elastic, small deflections, rigid supports, bonded faces "
                     "never slide or separate (no contact, no bolt preload).",
      "inputSchema": _obj({"project": _PROJECT, "case": {"type": "string", "description": "Load case name (fea.json)."},
                           "part": {"type": "string", "description": "Part label (default: the only part)."},
@@ -2796,9 +2797,9 @@ TOOLS = [
                           "gravity": {"type": "boolean"},
                           "material": {"type": ["string", "object"]},
                           "mesh_size": {"type": "number", "description": "Element size in mm (default from the part)."},
-                          "refine": {"type": "boolean", "description": "Also solve on a finer mesh: default only when "
-                                                                       "the first mesh is small; true forces it, false "
-                                                                       "skips it."},
+                          "refine": {"type": "boolean", "description": "The second mesh that shows convergence: by "
+                                     "default a finer one, or a coarser one when the first is large; true forces the "
+                                     "finer one; false solves once (fea_* checks on that result then fail)."},
                           "support_margin": {"type": "number", "description": "How far from a support (mm) the "
                                              "\"away from the supports\" stress starts (default from the part: its "
                                              "thinnest wall, at most 2/3 of its thinnest dimension)."},

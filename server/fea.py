@@ -1198,8 +1198,10 @@ def _axis_words(d):
 
 def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadline=None):
     """Solve a case → (result dict, png path or None). parts: the part objects; mats: {label:
-    material}; refine: True solves again on a finer mesh, False never, None when the first mesh
-    is small enough (AUTO_REFINE nodes); deadline: time.time() by which CalculiX must be done."""
+    material}. A second mesh shows whether the result has converged — refine None: a finer one
+    while the first is small enough (AUTO_REFINE nodes; the finer one is then the result), else a
+    coarser one; True: the finer one; False: no second mesh. deadline: time.time() by which
+    CalculiX must be done."""
     t0 = time.time()
     if not isinstance(parts, (list, tuple)):
         parts = [parts]
@@ -1228,28 +1230,44 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
     notes += plan["notes"]
     s1 = _solve(model, plan, mlist, size, work, kind, modes, deadline)
     r1 = summ(s1)
-    final, s_final, r2 = r1, s1, None
-    est = s1["elements"] * REFINE ** 3
-    if refine is None and s1["nodes"] > AUTO_REFINE:
-        notes.append("refined solve skipped: %s nodes — pass refine=true to force (convergence not shown; %s)" % (
-            _int(s1["nodes"]), "the thinnest wall, %s mm, has 2 or more elements through it" % an.fmt(wall, 2)
-            if wall and size <= 0.51 * wall else "the mesh is large" if not wall else
-            "the %s mm wall gets fewer than 2 elements through it — pass a smaller mesh_size" % an.fmt(wall, 2)))
-    elif refine is not False and est > HARD_MAX:
-        notes.append("refined solve skipped: it would have ≈%s elements — more than CalculiX solves in reasonable "
-                     "memory and time (≈9 GB for 320 000 nodes); pass mesh_size to choose the mesh" % _int(est))
-    elif refine is not False:
+    final, s_final, coarse, fine, extra = r1, s1, None, None, 0.0     # coarse, fine: the two meshes' summaries
+    if mesh_size and wall and size > 0.51 * wall:
+        notes.append("the %s mm wall gets fewer than 2 elements through it at this mesh size: stress and deflection "
+                     "there are less accurate, so pass a smaller mesh_size" % an.fmt(wall, 2))
+    if refine is False:
+        notes.append("solved on one mesh only (refine=false), so convergence is not shown: a fea_* check on this "
+                     "result fails unless it sets accept_unconverged")
+    else:
+        est = s1["elements"] * REFINE ** 3
+        finer = (refine is True or s1["nodes"] <= AUTO_REFINE) and est <= HARD_MAX
+        other = round(size / REFINE if finer else size * REFINE, 3)
+        side = work if finer else work + "_coarse"
         try:
-            s2 = _solve(model, plan, mlist, round(size / REFINE, 3), work, kind, modes, deadline)
-            r2 = summ(s2)
-            final, s_final = r2, s2
+            s2 = _solve(model, plan, mlist, other, side, kind, modes, deadline)
+            extra = s2["ccx_seconds"]
+            if finer:
+                coarse, fine = r1, summ(s2)
+                final, s_final = fine, s2
+            else:
+                coarse, fine = summ(s2), r1
+                notes.append("convergence is shown against a coarser mesh (%s mm, %s nodes): %s" % (
+                    an.fmt(other, 2), _int(s2["nodes"]),
+                    "a finer one would have ≈%s elements, more than CalculiX solves in reasonable memory and time "
+                    "(≈9 GB for 320 000 nodes)" % _int(est) if est > HARD_MAX else
+                    "a finer one than these %s nodes takes minutes, and refine=true solves it" % _int(s1["nodes"])))
         except CcxTimeout:
-            notes.append("refined solve stopped: it did not finish in the time left — the result is from the first "
-                         "mesh (%s nodes); pass a longer timeout to see convergence" % _int(s1["nodes"]))
+            notes.append("the second solve (at %s mm) did not finish in the time left, so convergence is not shown: "
+                         "pass a longer timeout" % an.fmt(other, 2))
+        except FeaError as e:
+            notes.append("the second solve (at %s mm) failed, so convergence is not shown: %s" % (
+                an.fmt(other, 2), (str(e).splitlines() or [""])[0][:300]))
+        finally:
+            if not finer:
+                shutil.rmtree(side, ignore_errors=True)
     res = dict(final)
     res.update(analysis=kind, material={k: mlist[0].get(k) for k in MAT_KEYS},
-               fixed=s1["fixed"], loads=s1["loads"], applied=list(s1["applied"]), coarse=r1 if r2 else None,
-               notes=notes, ccx_seconds=round(s1["ccx_seconds"] + (s_final["ccx_seconds"] if r2 else 0.0), 2),
+               fixed=s1["fixed"], loads=s1["loads"], applied=list(s1["applied"]), coarse=coarse,
+               notes=notes, ccx_seconds=round(s1["ccx_seconds"] + extra, 2),
                threads=threads(), method=METHOD, versions=versions())
     if kind == "static":
         res["support_margin"] = round(margin, 3)
@@ -1279,9 +1297,9 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
                                     "the pair)" % (b["a"], b["b"], _int(b["untied_nodes"]), b["follower"],
                                                    b["leader"]))
     if kind == "static":
-        _finish_static(res, s_final, r1, r2, mlist, model)
+        _finish_static(res, s_final, coarse, fine, mlist, model)
     else:
-        _finish_modes(res, r1, r2, kind, modes, case)
+        _finish_modes(res, coarse, fine, kind, modes, case)
     if s_final["warnings"]:
         res["ccx_warnings"] = s_final["warnings"][:20]
     for m, lb in zip(mlist, model.labels):
@@ -1302,6 +1320,7 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
 
 
 def _finish_static(res, s_final, r1, r2, mlist, model):
+    """r1, r2: the summaries of the coarser and the finer mesh, or None when one mesh was solved."""
     applied, reaction = s_final["applied"], s_final["reaction"]
     # measured against the size of the loads, not their resultant: loads that balance each other
     # (pressure inside a bore, two opposing forces) have no resultant to compare with
@@ -1336,6 +1355,7 @@ def _finish_static(res, s_final, r1, r2, mlist, model):
 
 
 def _finish_modes(res, r1, r2, kind, modes, case):
+    """r1, r2: the summaries of the coarser and the finer mesh, or None when one mesh was solved."""
     res["modes"] = modes
     if kind == "frequency":
         f = res["frequencies_hz"]
@@ -1369,6 +1389,8 @@ def _finish_modes(res, r1, r2, kind, modes, case):
             ch = abs(lam - r1["buckling_factor"]) / max(abs(lam), 1e-12)
             res["change"] = {"factor": ch}
             res["converged"] = res["converged_buckling"] = ch < 0.03
+        elif r2:        # the two meshes must agree on whether the loads buckle the part at all
+            res["converged"] = res["converged_buckling"] = lam is None and r1.get("buckling_factor") is None
         res["notes"].append("linear (eigenvalue) buckling assumes a perfect part: real parts buckle earlier "
                             "(imperfections, eccentric loads) — keep a margin of 3 or more on the factor")
 
@@ -1465,7 +1487,8 @@ def _report_static(lines, res):
         lines.append("stress    %s %s MPa at (%s) in %s" % (
             _judged(top["criterion"]), f(res["max_stress"], 3), an._pt(Vector(*res["max_stress_at"]), 2), top["part"]))
         for p in per:
-            lines.append("part      %s: %s %s MPa → safety factor %s against %s %.0f MPa%s · max displacement %s mm" % (
+            lines.append("part      %s: %s %s MPa → safety factor %s against %s %.0f MPa%s · max displacement %s "
+                         "mm" % (
                 p["part"], _judged(p["criterion"]), f(p["max_stress"], 3), f(p["safety_factor"], 2),
                 _strength(p["criterion"]), p["yield"],
                 " (away from the supports %s MPa → %s)" % (f(p["max_stress_away"], 3), f(p["safety_factor_away"], 2))

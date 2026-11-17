@@ -2117,9 +2117,8 @@ def fea_checks(pdir, project, checks, doc):
                 ok, val = f1 >= lim - 1e-9, "%s Hz (≥ %s)" % (fmt(f1, 1), fmt(lim, 1))
                 detail = "first natural frequency, case '%s'%s" % (
                     name, " — mode 1 is a rigid-body mode: the supports leave the part free" if f1 < 0.5 else "")
-                if r.get("converged_freq") is False:
-                    detail += " — f1 changed %.1f %% on a finer mesh (see the analyze notes)" % (
-                        100 * (r.get("change") or {}).get("f1", 0))
+                ok, val, detail = _settled(c, ok, val, detail, r.get("converged_freq"), "first frequency",
+                                           (r.get("change") or {}).get("f1"))
             elif kind == "buckling":
                 lam = r.get("buckling_factor")
                 if lam is None:
@@ -2132,9 +2131,8 @@ def fea_checks(pdir, project, checks, doc):
                     ap = math.sqrt(sum(x * x for x in r.get("applied") or [0, 0, 0]))
                     ok, val = lam >= lim - 1e-9, "%s (≥ %s)" % (fmt(lam, 2), fmt(lim, 2))
                     detail = "lowest positive buckling factor — buckles at %s N, case '%s'" % (fmt(lam * ap, 1), name)
-                if r.get("converged_buckling") is False:
-                    detail += " — the factor changed %.1f %% on a finer mesh (see the analyze notes)" % (
-                        100 * (r.get("change") or {}).get("factor", 0))
+                ok, val, detail = _settled(c, ok, val, detail, r.get("converged_buckling"), "buckling factor",
+                                           (r.get("change") or {}).get("factor"))
             else:
                 per = r.get("per_part") or [dict(part=r.get("part"), max_stress=r["max_stress"],
                                                  max_disp=r["max_disp"], max_stress_away=r.get("max_stress_away"),
@@ -2176,14 +2174,32 @@ def fea_checks(pdir, project, checks, doc):
                                          "stress away from the supports")
                 else:
                     conv, delta, what = r.get("converged_stress", r.get("converged")), ch.get("stress"), "peak stress"
-                if conv is False:
-                    detail += (" — the %s changed %.0f %% on a finer mesh (a singularity at a sharp corner or a rigid "
-                               "support edge, or a mesh too coarse: see the analyze notes)" % (what, 100 * (delta or 0)))
+                ok, val, detail = _settled(c, ok, val, detail, conv, what, delta)
         except (ValueError, TypeError, KeyError, fea.FeaError) as e:
             detail = str(e)
         res.append({"id": cid, "type": t, "ok": ok, "value": val, "detail": detail})
         lines.append("  %s %-18s %-11s %s%s" % ("✓" if ok else "✗", cid, t, val, ("   " + detail) if detail else ""))
     return lines, res, sorted(set(stale))
+
+
+def _settled(c, ok, val, detail, conv, what, delta):
+    """(ok, value, detail) of a fea_* check once convergence counts: a quantity that changed too much between the
+    two meshes (conv False), or that was solved on one mesh only (conv None), is not evidence. The check fails,
+    unless it accepts that with "accept_unconverged": true, and says so either way."""
+    if conv is True:
+        return ok, val, detail
+    if conv is False:
+        why = "the %s changed %s %% between the two meshes" % (what, fmt(100 * (delta or 0), 1))
+        how = ("That is a singularity (a sharp corner, the edge of a rigid support) or too coarse a mesh: judge it "
+               "away_from_supports, add a fillet or pass a smaller mesh_size" if what == "peak stress"
+               else "Pass a smaller mesh_size")
+    else:
+        why = "the case was solved on one mesh only, so convergence is not shown"
+        how = "Re-run it without refine=false"
+    if c.get("accept_unconverged"):
+        return ok, val + ", not converged (accepted)", "%s; %s, accepted by accept_unconverged" % (detail, why)
+    return False, val + ", not converged", "%s; %s. %s, or set \"accept_unconverged\": true on the check" % (
+        detail, why, how)
 
 
 def _geom_sig_of(doc, label):
