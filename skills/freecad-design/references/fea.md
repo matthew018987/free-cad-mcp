@@ -10,7 +10,7 @@ the current model.
 ```
 analyze(project="bracket", case="motor_load",
         fixed=["Bracket.holes(d=5.5)"],                       # what is held
-        loads=[{"ref": "Bracket.holes(d=22.4)", "force": 25, "direction": "-Z"},
+        loads=[{"ref": "Bracket.holes(d=22.4)", "bearing": 25, "direction": "-Z"},
                {"ref": "Bracket.face(+X)", "pressure": 0.05}],  # MPa, pushes on the face
         gravity=False, material=None, mesh_size=None, refine=True)
 ```
@@ -19,10 +19,23 @@ analyze(project="bracket", case="motor_load",
   supports are stiffer than real bolts and clamps, so results are slightly
   optimistic on deflection and pessimistic on stress right at the support.
 - **Loads**: `force` in N with a `direction` (`"-Z"`, `"+X+Y"`, `[x,y,z]`) or
-  as a vector `[fx, fy, fz]`, spread over the referenced faces; `pressure` in
+  as a vector `[fx, fy, fz]`, spread over the referenced faces; `bearing` in
+  N, with a direction across the axis, for what presses on the wall of a hole
+  (a pin, screw, shaft or ball bearing) or of a boss (a hub); `pressure` in
   MPa pushing on the face; `gravity=true` adds self weight. Loads from mating
-  parts go in as forces on the faces or holes they act on (a motor's weight
-  on its pilot bore and screw holes, a belt pull on a pulley seat).
+  parts go in on the faces or holes they act on: a motor's weight on its
+  pilot bore and a belt pull on a pulley seat as `bearing`, a clamping force
+  on a flat face as `force`.
+- **Bearing or force on a hole**: a `bearing` load only pushes, on the side
+  of the wall it presses against, as a contact pressure that follows the
+  cosine of the angle to the load (peak 4F / (π d t), which the reply
+  states). A `force` on a hole is spread over the whole wall and also pulls
+  on its far side: right for a bonded or threaded connection loaded along
+  its axis, but across the axis it halves the stress beside the hole, and
+  the reply says so. A stepped hole takes a bearing load on its smallest
+  diameter, where the screw or pin passes; `"d": 22` in the load picks
+  another (a bearing seat). Several holes in one reference share the load
+  in proportion to their wall area.
 - **Material**: from `project.json` (`parts.<Part>.material`, else the
   project material) via the material table (E, ν, yield — see them first with
   `lookup_standard(material="PETG")`), or

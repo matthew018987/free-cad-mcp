@@ -190,8 +190,8 @@ class Model:
                     break
             self.face_owner.append(own)
 
-    def faces(self, ref):
-        """(part index, [compound face indices], label) of a face / hole / boss reference."""
+    def entity(self, ref):
+        """(part index, resolved reference) of a reference on one of the parts."""
         try:
             e = an.resolve(self.doc, ref)
         except an.RefError as ex:
@@ -203,7 +203,51 @@ class Model:
                                ref, " or ".join(self.labels), "s" if len(self.parts) > 1 else "",
                                "" if len(self.parts) > 1 else " (to include another part, analyse them together: "
                                "parts=[…] with bonded=[[face, face]])"))
-        k = self.parts.index(obj)
+        return self.parts.index(obj), e
+
+    def axis(self, ref):
+        """Unit axis of a hole, boss or cylindrical face reference (the first hole's), else None."""
+        _, e = self.entity(ref)
+        if e.kind in ("holes", "bosses"):
+            return Vector(e.feats()[0]["axis"])
+        if e.kind == "face" and e.shape.Surface.__class__.__name__ == "Cylinder":
+            return Vector(an._canon(e.shape.Surface.Axis))
+        return None
+
+    def cylinders(self, ref, d=None):
+        """(part index, [compound face indices], label, [diameters]) of the cylinder walls a bearing
+        load presses on: a cylindrical face, or of every referenced hole or boss the wall of one
+        diameter (d, else its smallest, where the screw, pin or shaft passes)."""
+        k, e = self.entity(ref)
+        want, diams = [], []
+        if e.kind in ("holes", "bosses"):
+            for h in e.feats():
+                cyl = [f for f in (self.shapes[k].Faces[int(n[4:]) - 1] for n in h["faces"])
+                       if f.Surface.__class__.__name__ == "Cylinder"]
+                have = sorted(set(round(2 * f.Surface.Radius, 4) for f in cyl))
+                if d is None:
+                    pick = have[0]
+                else:
+                    near = [x for x in have if min(abs(x - float(d)), abs(x - h.get("design_comp", 0.0) - float(d)))
+                            < 0.011]
+                    if not near:
+                        raise FeaError("%s has no Ø%s wall: its diameters are %s" % (
+                            ref, an._g(float(d)), ", ".join("Ø%s" % an._g(x) for x in have)))
+                    pick = near[0]
+                want += [f for f in cyl if abs(2 * f.Surface.Radius - pick) < 1e-4]
+                if pick not in diams:
+                    diams.append(pick)
+        elif e.kind == "face" and e.shape.Surface.__class__.__name__ == "Cylinder":
+            want, diams = [e.shape], [round(2 * e.shape.Surface.Radius, 4)]
+        else:
+            raise FeaError("%s is a %s: a bearing load presses on the wall of a hole, a boss or a cylindrical face "
+                           "(e.g. %s.holes(d=8)); on a flat face use pressure or force" % (
+                               ref, "flat face" if e.kind == "face" else e.kind, self.labels[k]))
+        return k, self._compound_faces(k, want, ref), e.label, diams
+
+    def faces(self, ref):
+        """(part index, [compound face indices], label) of a face / hole / boss reference."""
+        k, e = self.entity(ref)
         if e.kind in ("holes", "bosses"):
             names = []
             for h in (e.holes if e.kind == "holes" else e.bosses):
@@ -215,6 +259,10 @@ class Model:
             lb = self.labels[k]
             raise FeaError("%s is a %s — supports, loads and bonded faces go on faces or holes, e.g. %s.face(-Z) "
                            "or %s.holes(d=5.5)" % (ref, e.kind, lb, lb))
+        return k, self._compound_faces(k, want, ref), e.label
+
+    def _compound_faces(self, k, want, ref):
+        """Indices in the compound of faces of part k's shape."""
         out = []
         for f in want:
             hit = None
@@ -227,7 +275,7 @@ class Model:
                 raise FeaError("could not find %s among %s's faces" % (ref, self.labels[k]))
             if hit not in out:
                 out.append(hit)
-        return k, out, e.label
+        return out
 
 
 # ------------------------------------------------------------------ mesh
@@ -515,16 +563,31 @@ class Mesh:
         import numpy as np
         return np.concatenate([self.tris[j] for j in faces]) if faces else np.zeros((0, 6), dtype=np.int64)
 
-    def element_faces(self, tris):
-        """(element ids, face numbers 1–4) of boundary triangles (tria6 node ids)."""
+    def _rows(self, tris):
+        """Rows (4 · element + face) of boundary triangles (tria6 node ids) in the element-face table."""
         import numpy as np
         k = _tri_keys(tris[:, :3])
         i = np.searchsorted(self._keys, k)
         i = np.minimum(i, len(self._keys) - 1)
         if not (self._keys[i] == k).all():
             raise FeaError("a face triangle has no element face — the mesh is inconsistent; try another mesh_size")
-        row = self._order[i]
+        return self._order[i]
+
+    def element_faces(self, tris):
+        """(element ids, face numbers 1–4) of boundary triangles (tria6 node ids)."""
+        row = self._rows(tris)
         return self.eid[row // 4], row % 4 + 1
+
+    def outward(self, tris):
+        """(unit outward normals, areas) of boundary triangles, taken flat between their corners."""
+        import numpy as np
+        row = self._rows(tris)
+        p = self.xyz[self.pos[tris[:, :3]]]
+        n = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
+        inside = self.xyz[self.pos[self.conn[row // 4, np.array([3, 2, 0, 1])[row % 4]]]]
+        n[(n * (inside - p[:, 0])).sum(axis=1) > 0] *= -1.0
+        a = 0.5 * np.linalg.norm(n, axis=1)
+        return n / (2.0 * a)[:, None], a
 
     def areas(self, tris):
         import numpy as np
@@ -579,35 +642,60 @@ def _resolve(model, case, mats, kind, size, margin):
         fixed_faces += [j for j in faces if j not in fixed_faces]
         fixed_parts.add(k)
         fixed_labels.append("%s (%d face%s)" % (label, len(faces), "" if len(faces) == 1 else "s"))
-    applied, load_lines, loads = Vector(), [], []
+    applied, load_lines, loads, notes = Vector(), [], [], []
     scale = 0.0                          # the size of the loads (N): what a balance error is measured against
+
+    def force_of(ld, key, k, label):
+        """(magnitude, unit direction) of a force given as N + direction or as a vector."""
+        fv = ld[key]
+        if isinstance(fv, (list, tuple)):
+            vec = Vector(*[float(c) for c in fv])
+            if vec.Length < 1e-12:
+                raise FeaError("load %d: %s vector is zero" % (k + 1, key))
+            d = Vector(vec)
+            d.normalize()
+            return vec.Length, d
+        if "direction" not in ld:
+            raise FeaError("load %d on %s: give direction (e.g. \"-Z\" or [0, 0, -1]) with a %s "
+                           "magnitude, or %s as a vector [fx, fy, fz] in N" % (k + 1, label, key, key))
+        return float(fv), _direction(ld["direction"])
     if kind != "frequency":
         for k, ld in enumerate(case.get("loads") or []):
             if not isinstance(ld, dict) or "ref" not in ld:
-                raise FeaError("each load is {\"ref\": face/hole, \"force\": N, \"direction\": \"-Z\"} or "
+                raise FeaError("each load is {\"ref\": face/hole, \"force\": N, \"direction\": \"-Z\"}, "
+                               "{\"ref\": hole, \"bearing\": N, \"direction\": \"+X\"} or "
                                "{\"ref\": …, \"pressure\": MPa} — got %s" % json.dumps(ld))
             _, faces, label = model.faces(ld["ref"])
             if set(faces) & set(fixed_faces):
                 raise FeaError("%s is also a support — a load on a fixed face does nothing" % ld["ref"])
-            if "force" in ld:
-                fv = ld["force"]
-                if isinstance(fv, (list, tuple)):
-                    vec = Vector(*[float(c) for c in fv])
-                    mag = vec.Length
-                    if mag < 1e-12:
-                        raise FeaError("load %d: force vector is zero" % (k + 1))
-                    d = Vector(vec)
-                    d.normalize()
-                else:
-                    mag = float(fv)
-                    if "direction" not in ld:
-                        raise FeaError("load %d on %s: give direction (e.g. \"-Z\" or [0, 0, -1]) with a force "
-                                       "magnitude, or force as a vector [fx, fy, fz] in N" % (k + 1, label))
-                    d = _direction(ld["direction"])
+            if "bearing" in ld:
+                mag, d = force_of(ld, "bearing", k, label)
+                _, faces, label, diams = model.cylinders(ld["ref"], ld.get("d"))
+                across = abs(d.dot(model.axis(ld["ref"])))
+                if across > 0.05:
+                    raise FeaError("load %d on %s: a bearing load presses across the hole, but this direction is "
+                                   "%.0f° off that (the axis is along %s): give a direction square to the axis, or "
+                                   "use force for a load along it" % (
+                                       k + 1, label, math.degrees(math.asin(min(1.0, across))),
+                                       an._axis_name(model.axis(ld["ref"]))))
+                loads.append({"faces": faces, "bearing": (d.x * mag, d.y * mag, d.z * mag), "label": label})
+                applied += d * mag
+                scale += mag
+                load_lines.append("bearing load %s N along (%s) on %s (pressing on the %s wall, on the side it "
+                                  "pushes against)" % (an.fmt(mag, 3), an._pt(d, 3), label,
+                                                       " and ".join("Ø%s" % an._g(x) for x in diams)))
+            elif "force" in ld:
+                mag, d = force_of(ld, "force", k, label)
                 loads.append({"faces": faces, "force": (d.x * mag, d.y * mag, d.z * mag)})
                 applied += d * mag
                 scale += mag
                 load_lines.append("force %s N along (%s) on %s" % (an.fmt(mag, 3), an._pt(d, 3), label))
+                ax = model.axis(ld["ref"])
+                if ax is not None and abs(d.dot(ax)) < 0.95:
+                    notes.append("the force on %s is spread over the whole wall, so it also pulls on the far side, "
+                                 "which a pin, screw or shaft cannot do: the stress around it comes out too low. "
+                                 "For a load that presses on the wall write \"bearing\" in place of \"force\""
+                                 % label)
             elif "pressure" in ld:
                 p = float(ld["pressure"])
                 loads.append({"faces": faces, "pressure": p})
@@ -615,7 +703,7 @@ def _resolve(model, case, mats, kind, size, margin):
                 scale += abs(p) * sum(model.compound.Faces[j].Area for j in faces)
                 load_lines.append("pressure %s MPa on %s (pushing on the face)" % (an.fmt(p, 4), label))
             else:
-                raise FeaError("load %d on %s needs force (N) or pressure (MPa)" % (k + 1, label))
+                raise FeaError("load %d on %s needs force (N), bearing (N) or pressure (MPa)" % (k + 1, label))
     grav = bool(case.get("gravity")) and kind != "frequency"
     if grav:
         w = sum(s.Volume * float(mats[k]["density"]) * 1e-6 * 9.81 for k, s in enumerate(model.shapes))
@@ -656,7 +744,7 @@ def _resolve(model, case, mats, kind, size, margin):
         raise FeaError("%s %s neither supported nor bonded to a supported part — add fixed=[…] on it or a bonded "
                        "pair that joins it to one" % (", ".join(free), "is" if len(free) == 1 else "are"))
     return {"fixed_faces": fixed_faces, "fixed_labels": fixed_labels, "loads": loads, "gravity": grav,
-            "bonds": bonds, "applied": applied, "load_scale": scale, "load_lines": load_lines,
+            "bonds": bonds, "applied": applied, "load_scale": scale, "load_lines": load_lines, "notes": notes,
             "fixed_points": _sample_faces([model.compound.Faces[j] for j in fixed_faces], margin / 6.0)}
 
 
@@ -665,10 +753,34 @@ def _sets(model, mesh, plan):
     import numpy as np
     fixed = mesh.face_nodes(plan["fixed_faces"])
     cload = np.zeros((mesh.nodes, 3))
-    dload = []
+    dload, bearing = [], []
     for ld in plan["loads"]:
         tris = mesh.face_tris(ld["faces"])
-        if "force" in ld:
+        if "bearing" in ld:
+            # a pin, screw or shaft only pushes: a pressure on the side of the wall the load presses on, in
+            # proportion to the cosine of the angle between the push and the wall's inward normal
+            force = np.array(ld["bearing"], dtype=float)
+            mag = float(np.linalg.norm(force))
+            d = force / mag
+            n, a = mesh.outward(tris)
+            w = np.clip(-(n @ d), 0.0, None)
+            f = -n * (w * a)[:, None]                             # each triangle's push per unit of peak pressure
+            along = float(f.sum(axis=0) @ d)
+            off = float(np.linalg.norm(f.sum(axis=0) - along * d)) / max(along, 1e-30)
+            if along <= 1e-12 or off > 0.05:
+                raise FeaError("bearing load on %s: %s" % (ld["label"], (
+                    "no part of the wall faces the load" if along <= 1e-12 else
+                    "the wall is not the same on both sides of the load direction (the push it can give is %.0f° "
+                    "off it): turn the direction, or use force" % math.degrees(math.atan(off)))))
+            f *= mag / along
+            pressed = w > 0
+            # the remainder of an uneven mesh goes back in evenly: the resultant is the force exactly
+            f[pressed] -= np.outer(a[pressed] / a[pressed].sum(), f.sum(axis=0) - force)
+            for c in (3, 4, 5):
+                np.add.at(cload, mesh.pos[tris[:, c]], f / 3.0)
+            bearing.append({"on": ld["label"], "force": mag, "peak_pressure": mag / along * float(w.max()),
+                            "area": float(a[pressed].sum())})
+        elif "force" in ld:
             # a uniform traction: each quadratic triangle's share goes to its three mid-side nodes
             a = mesh.areas(tris)
             share = a / a.sum() / 3.0
@@ -688,7 +800,7 @@ def _sets(model, mesh, plan):
                      "tol": b["gap"] + max(0.01, 0.1 * mesh.size)})
         tie_lines.append([b["refs"][0], b["refs"][1], model.labels[ks], model.labels[km], len(slave)])
     return {"fixed": fixed, "cload": cload, "dload": dload, "gravity": plan["gravity"], "ties": ties,
-            "tie_lines": tie_lines}
+            "tie_lines": tie_lines, "bearing": bearing}
 
 
 def _write_inp(path, model, mesh, mats, kind, modes, st):
@@ -951,7 +1063,7 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
     s = {"size": size, "nodes": mesh.nodes, "elements": mesh.elements, "quality": mesh.quality,
          "xyz": mesh.xyz, "surface": mesh.surface,
          "npart": mesh.npart, "applied": plan["applied"], "load_scale": plan["load_scale"],
-         "fixed": plan["fixed_labels"], "loads": plan["load_lines"],
+         "fixed": plan["fixed_labels"], "loads": plan["load_lines"], "bearing": st["bearing"],
          "fixed_points": plan["fixed_points"],
          "ccx_seconds": round(t_ccx, 2), "mesh_seconds": round(t_mesh, 2),
          "warnings": [ln.strip() for ln in out_lines if "*WARNING" in ln and "gentiedmpc" not in ln]}
@@ -1113,6 +1225,7 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
     margin = support_margin(case, base)
     summ = (lambda s: _summary(s, model, mlist, margin)) if kind == "static" else (lambda s: _mode_summary(s, kind))
     plan = _resolve(model, case, mlist, kind, size, margin)
+    notes += plan["notes"]
     s1 = _solve(model, plan, mlist, size, work, kind, modes, deadline)
     r1 = summ(s1)
     final, s_final, r2 = r1, s1, None
@@ -1140,6 +1253,8 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
                threads=threads(), method=METHOD, versions=versions())
     if kind == "static":
         res["support_margin"] = round(margin, 3)
+    if s_final["bearing"]:
+        res["bearing"] = s_final["bearing"]
     if len(model.parts) == 1:
         res["part"] = model.labels[0]
     else:
@@ -1281,6 +1396,9 @@ def report_lines(res, case_name):
     if kind != "frequency":
         for ld in res["loads"]:
             lines.append("load      %s" % ld)
+        for b in res.get("bearing") or []:
+            lines.append("          %s: peak contact pressure %s MPa, pressing on %s mm² of the wall" % (
+                b["on"], f(b["peak_pressure"], 3), f(b["area"], 1)))
     mesh = "mesh      tet10, %s nodes, %s elements at %s mm" % (_int(res["nodes"]), _int(res["elements"]),
                                                                f(res["size"], 2))
     if res.get("coarse"):
