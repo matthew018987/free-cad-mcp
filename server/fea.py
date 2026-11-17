@@ -20,6 +20,7 @@ is small enough to afford it.
 
 Limits: linear elastic, small displacements, isotropic material, rigid
 supports; bonded faces are glued (no contact, sliding or bolt preload)."""
+import contextlib
 import hashlib
 import json
 import math
@@ -48,7 +49,10 @@ ANALYSES = ("static", "frequency", "buckling")
 DEFAULT_MODES = {"frequency": 6, "buckling": 3}
 TITLES = {"static": "linear static", "frequency": "natural frequencies", "buckling": "linear buckling"}
 MAT_KEYS = ("name", "E", "nu", "yield", "density", "brittle", "source", "note")     # of a material, kept in a result
+MIN_JACOBIAN = 0.02      # scaled Jacobian below which a curved element counts as folded over (and is straightened)
+POOR_JACOBIAN = 0.2      # … and below which it is reported as badly distorted
 C3D10_FACES = ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0))   # CalculiX tet faces S1..S4 (corner indices)
+C3D10_EDGES = ((0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3))  # corners of the mid-side nodes 5..10
 SMESH_TO_CCX = (1, 0, 2, 3, 4, 6, 5, 8, 7, 9)              # FreeCAD tet10 node order → CalculiX C3D10
 
 
@@ -346,6 +350,40 @@ def _within(xyz, pts, r):
     return out
 
 
+@contextlib.contextmanager
+def _one_gmsh_thread():
+    """gmsh on one thread. On several it returns a different mesh on every run, so the same case
+    would give different numbers each time; one thread costs no time. FreeCAD passes gmsh its FEM
+    preference NumOfThreads, which is put back afterwards."""
+    prm = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh")
+    had = "NumOfThreads" in prm.GetInts()
+    old = prm.GetInt("NumOfThreads", 1)
+    prm.SetInt("NumOfThreads", 1)
+    try:
+        yield
+    finally:
+        if had:
+            prm.SetInt("NumOfThreads", old)
+        else:
+            prm.RemInt("NumOfThreads")
+
+
+def _tet10_gradients():
+    """Derivatives of the ten C3D10 shape functions at CalculiX's four integration points:
+    (4, 10, 3), with respect to the element's own coordinates."""
+    import numpy as np
+    a, b = 0.5854101966249685, 0.1381966011250105
+    dl = np.array([[-1.0, -1.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    out = np.zeros((4, 10, 3))
+    for g in range(4):
+        w = [a if i == g else b for i in range(4)]              # the point's four volume coordinates
+        for i in range(4):
+            out[g, i] = (4 * w[i] - 1) * dl[i]
+        for k, (i, j) in enumerate(C3D10_EDGES):
+            out[g, 4 + k] = 4 * (w[i] * dl[j] + w[j] * dl[i])
+    return out
+
+
 class Mesh:
     """A tet10 mesh as numpy arrays: nodes (ids, xyz), elements (ids, CalculiX connectivity, part),
     the triangles of every solid face (FreeCAD tria6 node ids), and a lookup from a boundary
@@ -365,8 +403,13 @@ class Mesh:
             m.CharacteristicLengthMax = "%g mm" % size
             m.ElementOrder = "2nd"
             m.CoherenceMesh = False          # each part keeps its own nodes; bonded faces are tied
+            try:                             # gmsh untangles the curved elements that fold over at a curved face
+                m.HighOrderOptimize = "Optimization"
+            except (AttributeError, TypeError, ValueError):
+                pass
             fdoc.recompute()
-            err = GmshTools(m).create_mesh()
+            with _one_gmsh_thread():
+                err = GmshTools(m).create_mesh()
             fm = m.FemMesh
             if err or fm.VolumeCount == 0:
                 raise FeaError("gmsh could not mesh %s at %g mm (%s) — try a different mesh_size" % (
@@ -406,6 +449,7 @@ class Mesh:
             App.closeDocument(fdoc.Name)
         self.pos = np.full(int(self.nid.max()) + 1, -1, dtype=np.int64)
         self.pos[self.nid] = np.arange(len(self.nid))
+        self.quality = self._untangle(model)
         # every element face (row 4·e + s is face s+1 of element e), sorted by its corner nodes
         tf = self.conn[:, [c for f in C3D10_FACES for c in f]].reshape(-1, 3)
         keys = _tri_keys(tf)
@@ -424,6 +468,34 @@ class Mesh:
         self.surface = tri
         self.npart = np.full(len(self.nid), -1, dtype=np.int64)
         self.npart[self.pos[self.conn.ravel()]] = np.repeat(self.epart, 10)
+
+    def _untangle(self, model):
+        """No element may fold over: where the Jacobian determinant of a curved element is ≤ 0 at
+        an integration point CalculiX stops. The few that gmsh's optimiser leaves get straight
+        edges (their mid-side nodes go to the middle of their corners), which keeps them valid
+        and makes the surface locally faceted. Returns {min_jacobian, distorted, straightened}.
+        The scaled Jacobian is the smallest determinant over that of the straight-sided element:
+        1 is undistorted, 0 folded."""
+        import numpy as np
+        dn = _tet10_gradients()
+        straightened = np.zeros(len(self.eid), dtype=bool)
+        for attempt in range(5):
+            X = self.xyz[self.pos[self.conn]]
+            ref = np.einsum("mi,mi->m", np.cross(X[:, 1] - X[:, 0], X[:, 2] - X[:, 0]), X[:, 3] - X[:, 0])
+            if (ref <= 0).any():
+                raise FeaError("gmsh returned %d inverted elements for %s at %g mm: try a different mesh_size" % (
+                    int((ref <= 0).sum()), " + ".join(model.labels), self.size))
+            q = np.linalg.det(np.einsum("mai,gaj->mgij", X, dn)).min(axis=1) / ref
+            bad = q < MIN_JACOBIAN
+            if not bad.any():
+                return {"min_jacobian": round(float(q.min()), 3), "distorted": int((q < POOR_JACOBIAN).sum()),
+                        "straightened": int(straightened.sum())}
+            straightened |= bad
+            c = self.pos[self.conn[bad]]
+            for k, (i, j) in enumerate(C3D10_EDGES):
+                self.xyz[c[:, 4 + k]] = 0.5 * (self.xyz[c[:, i]] + self.xyz[c[:, j]])
+        raise FeaError("the mesh of %s at %g mm keeps %d elements folded over at a curved face: try a different "
+                       "mesh_size" % (" + ".join(model.labels), self.size, int(bad.sum())))
 
     @property
     def nodes(self):
@@ -870,11 +942,14 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
             if os.path.isfile(os.path.join(workdir, fn)):
                 sta += open(os.path.join(workdir, fn), errors="replace").read()[-400:]
         text = log + sta
-        hint = ("the part can still move or rotate — add supports so it is held in every direction"
+        hint = ("the mesh has elements folded over at a curved face (nonpositive Jacobian): pass another mesh_size"
+                if re.search(r"nonpositive jacobian", text, re.I) else
+                "the part can still move or rotate — add supports so it is held in every direction"
                 if re.search(r"zero pivot|singular|not converge|nonpositive|no convergence", text, re.I)
                 else "see the CalculiX output below")
         raise FeaError("CalculiX produced no result: %s\n%s" % (hint, "\n".join(errors[:6]) or log.strip()[-600:]))
-    s = {"size": size, "nodes": mesh.nodes, "elements": mesh.elements, "xyz": mesh.xyz, "surface": mesh.surface,
+    s = {"size": size, "nodes": mesh.nodes, "elements": mesh.elements, "quality": mesh.quality,
+         "xyz": mesh.xyz, "surface": mesh.surface,
          "npart": mesh.npart, "applied": plan["applied"], "load_scale": plan["load_scale"],
          "fixed": plan["fixed_labels"], "loads": plan["load_lines"],
          "fixed_points": plan["fixed_points"],
@@ -970,7 +1045,7 @@ def _summary(s, model, mats, margin):
            "max_disp": float(dl[i]), "max_disp_at": [float(c) for c in xyz[i]],
            "max_disp_vec": [float(c) for c in s["U"][i]],
            "safety_factor": min(sfs) if sfs else None,
-           "nodes": s["nodes"], "elements": s["elements"], "size": s["size"]}
+           "nodes": s["nodes"], "elements": s["elements"], "size": s["size"], "mesh_quality": s["quality"]}
     if len(per) > 1:
         out["per_part"] = per
     return out
@@ -980,7 +1055,7 @@ def _mode_summary(s, kind):
     """Frequency / buckling: the values, and where and which way the first relevant mode moves."""
     import numpy as np
     vals = s["values"]
-    out = {"nodes": s["nodes"], "elements": s["elements"], "size": s["size"]}
+    out = {"nodes": s["nodes"], "elements": s["elements"], "size": s["size"], "mesh_quality": s["quality"]}
     if kind == "frequency":
         out["frequencies_hz"] = vals
         pick = 0
@@ -1070,6 +1145,15 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
     else:
         res["parts"] = model.labels
         res["materials"] = {lb: {k: m.get(k) for k in MAT_KEYS} for lb, m in zip(model.labels, mlist)}
+    q = s_final["quality"]
+    if q["straightened"]:
+        res["notes"].append("%d element%s folded over at a curved face and got straight edges: the surface is "
+                            "faceted there" % (q["straightened"], "" if q["straightened"] == 1 else "s"))
+    if q["distorted"]:
+        res["notes"].append("%d element%s badly distorted at curved faces (scaled Jacobian down to %s, 1 is "
+                            "undistorted): the stress next to them is less accurate, and a smaller mesh_size helps"
+                            % (q["distorted"], " is" if q["distorted"] == 1 else "s are",
+                               an.fmt(q["min_jacobian"], 2)))
     if s_final["ties"]:
         res["bonded"] = [{"a": a, "b": b, "follower": sl, "leader": ml, "tied_nodes": n - u, "untied_nodes": u}
                          for a, b, sl, ml, n, u in s_final["ties"]]
@@ -1201,6 +1285,8 @@ def report_lines(res, case_name):
                                                                f(res["size"], 2))
     if res.get("coarse"):
         mesh += " (also solved at %s mm: %s nodes)" % (f(res["coarse"]["size"], 2), _int(res["coarse"]["nodes"]))
+    if res.get("mesh_quality"):
+        mesh += " · scaled Jacobian ≥ %s" % f(res["mesh_quality"]["min_jacobian"], 2)
     lines.append(mesh)
     if kind == "static":
         _report_static(lines, res)

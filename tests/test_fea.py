@@ -64,6 +64,23 @@ near = fea._within(g, fea._sample_faces([f], 5.0 / 6), 5.0)
 d = np.abs(g[:, 0] - g[:, 2]) / 2 ** 0.5
 fc.result(points=len(g), near=int(near.sum()), wrong=int((near != (d <= 5.0)).sum()))
 '''
+# a thick tube meshed twice at the size its refined solve uses (curved elements folded over there, and every run
+# gave another mesh), then once with every curved element counted as folded, so that all are straightened
+MESH = '''import types
+import numpy as np
+import fea
+prefs = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh")
+before = prefs.GetInts()
+tube = Part.makeCylinder(20, 80).cut(Part.makeCylinder(10, 80))
+def model():
+    return types.SimpleNamespace(labels=["Tube"], parts=[None], solid_owner=[0],
+                                 compound=Part.makeCompound(tube.Solids))
+a, b = fea.Mesh(model(), 3.333), fea.Mesh(model(), 3.333)
+fea.MIN_JACOBIAN = 0.999
+c = fea.Mesh(model(), 5.0)
+fc.result(same=bool(a.nodes == b.nodes and np.array_equal(a.xyz, b.xyz)), quality=a.quality, forced=c.quality,
+          prefs_kept=before == prefs.GetInts())
+'''
 ROOT = os.path.dirname(HERE)
 E_6061, RHO_6061 = 68900.0, 2.70e-9          # MPa, t/mm³ — the material table's 6061-T6
 TIMES = {}
@@ -192,6 +209,10 @@ def main():
           and abs(res["max_principal"] + res["min_principal"]) < 0.15 * res["max_principal"]
           and re.search(r"principal largest tension [\d.]+ MPa at \(.*\) · largest compression -[\d.]+ MPa", txt)
           and res.get("criterion") == "von Mises" and res["max_stress"] == res["max_vm"], (res, txt))
+    check("…and the mesh's worst element: the scaled Jacobian (1 is undistorted, 0 folded over)",
+          re.search(r"mesh      tet10, .* · scaled Jacobian ≥ 0\.\d+", txt)
+          and res.get("mesh_quality", {}).get("min_jacobian", 0) > 0.3 and res["mesh_quality"]["straightened"] == 0,
+          (res.get("mesh_quality"), txt))
     single = res["max_disp"]
     fj = json.load(open(os.path.join(pdir, "fea.json")))
     check("case saved in fea.json", fj["cases"]["tip"]["fixed"] == ["Beam.face(-X)"], fj)
@@ -217,6 +238,12 @@ def main():
     sa12 = num(r"away from the supports: ([\d.]+) MPa", txt)
     check("support_margin=12 moves it: M·c/I at x = 12 is 52.8 MPa", not err and sa12 and abs(sa12 - 52.8) / 52.8 < 0.02
           and "(over 12.00 mm from a support)" in txt, txt)
+    r12 = result(pdir, "margin") if not err else {}
+    err, txt, _ = c.tool("analyze", dict(tip, support_margin=12))
+    again = result(pdir, "margin") if not err else {}
+    check("the same case twice gives the same mesh and the same numbers", r12.get("nodes") and all(
+        r12.get(k) == again.get(k) for k in ("nodes", "elements", "max_vm", "max_disp", "max_stress_away")),
+        [(r12.get(k), again.get(k)) for k in ("nodes", "max_vm", "max_disp")])
     err, txt, _ = c.tool("analyze", dict(tip, support_margin=0))
     check("support_margin=0 → refused", err and "support_margin must be" in txt, txt)
     err, txt, _ = c.tool("run_script", {"code": ZONE})
@@ -224,6 +251,17 @@ def main():
     check("the zone is measured to the support face itself: every point of a grid within 5 mm of a slanted face, and "
           "no other (the face's bounding box would take all %s)" % z.get("points"),
           not err and z.get("wrong") == 0 and z.get("near") == 2835 and z.get("points") == 9261, txt)
+
+    print("the mesh: repeatable, and no element folded over")
+    err, txt, _ = c.tool("run_script", {"code": MESH}, timeout=600)
+    z = script_result(txt)
+    check("a curved part meshes the same on every run, with FreeCAD's gmsh preferences left as they were",
+          not err and z.get("same") is True and z.get("prefs_kept") is True, txt)
+    check("…and no curved element folds over (scaled Jacobian %s)" % (z.get("quality") or {}).get("min_jacobian"),
+          (z.get("quality") or {}).get("min_jacobian", 0) > 0.3 and z["quality"]["straightened"] == 0, z)
+    check("…elements that do fold over get straight edges (%s here, forced)" % (z.get("forced") or {}).get(
+        "straightened"), (z.get("forced") or {}).get("straightened", 0) > 500
+        and z["forced"]["min_jacobian"] >= 0.999, z)
 
     print("a brittle material is judged on its principal stresses")
     light = dict(tip, case="brittle", loads=[{"ref": "Beam.face(+X)", "force": 10, "direction": "-Z"}])

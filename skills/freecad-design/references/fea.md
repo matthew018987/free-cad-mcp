@@ -32,7 +32,11 @@ analyze(project="bracket", case="motor_load",
   `"brittle": true` in the material or `parts.<Part>.brittle` for another)
   breaks without yielding: its `yield` is its breaking stress.
 - **Mesh**: a size from the part (at least two elements through its thinnest
-  wall, coarsened for large parts); `mesh_size` overrides. The refined solve
+  wall, coarsened for large parts); `mesh_size` overrides. The same case
+  meshes the same on every run. The `mesh` line ends with the worst
+  element's scaled Jacobian (1 undistorted, 0 folded over); a note names
+  badly distorted elements at curved faces, where the stress is less
+  accurate. The refined solve
   (size/1.5, to show convergence) runs by default only when the first mesh
   has ≤ 50 000 nodes — the reply says when it was skipped; `refine=true`
   forces it (minutes and several GB on big meshes), `refine=false` skips it.
