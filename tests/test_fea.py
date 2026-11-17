@@ -53,6 +53,17 @@ fc.holes(body, on=fc.face(body, "-Y"), at=[(P.width / 2, -15), (P.width / 2, -15
          spec="M5 clearance normal")
 fc.fillet(body, fc.edges(body, kind="line", parallel="X", at=0, axis="Z"), P.corner_r)
 """
+# a face slanted across a 40 mm cube (its bounding box is the whole cube) and a grid of points in the cube:
+# which points lie within 5 mm of the face, against their distance to the plane x = z
+ZONE = '''import numpy as np
+import fea
+f = Part.Face(Part.makePolygon([App.Vector(0, 0, 0), App.Vector(40, 0, 40), App.Vector(40, 40, 40),
+                                App.Vector(0, 40, 0), App.Vector(0, 0, 0)]))
+g = np.mgrid[0:41:2, 0:41:2, 0:41:2].reshape(3, -1).T.astype(float)
+near = fea._within(g, fea._sample_faces([f], 5.0 / 6), 5.0)
+d = np.abs(g[:, 0] - g[:, 2]) / 2 ** 0.5
+fc.result(points=len(g), near=int(near.sum()), wrong=int((near != (d <= 5.0)).sum()))
+'''
 ROOT = os.path.dirname(HERE)
 E_6061, RHO_6061 = 68900.0, 2.70e-9          # MPa, t/mm³ — the material table's 6061-T6
 TIMES = {}
@@ -115,6 +126,12 @@ def result(pdir, case):
     return json.load(open(os.path.join(pdir, "out", "fea", case, "result.json")))
 
 
+def script_result(txt):
+    """The fc.result(...) JSON block of a run_script reply."""
+    m = re.search(r"^result\n((?:  .*\n?)+)", txt, re.M)
+    return json.loads(m.group(1)) if m else {}
+
+
 def project(c, home, name, model, prm, material="6061-T6"):
     c.tool("create_project", {"name": name, "template": "part", "process": "cnc", "material": material})
     pdir = os.path.join(home, name)
@@ -154,6 +171,8 @@ def main():
     check("root bending stress ≈ 60 MPa (M·c/I)", s and 54 <= s <= 70, txt)
     sa = num(r"away from the supports: ([\d.]+) MPa", txt)
     check("…away from the support ≈ 57 MPa (theory at x≈4.5: 57.3)", sa and 52 <= sa <= 62, txt)
+    check("…and says how far from the support that is: the part's thinnest wall, at most 2/3 of its thinnest "
+          "dimension", "(over 6.67 mm from a support)" in txt, txt)
     check("safety factor against 276 MPa yield", re.search(r"safety factor 4\.\d+ against yield 276", txt), txt)
     check("reactions balance the applied load", "✓ in equilibrium" in txt and "100.00) N" in txt, txt)
     check("refined mesh: converged (a small first mesh is re-solved finer by default)", "converged ✓" in txt, txt)
@@ -185,6 +204,21 @@ def main():
     err, txt4, _ = c.tool("lookup_standard", {"material": "PETG"})
     check("lookup_standard(material) gives the values analyze uses", not err and "E 2100 MPa" in txt4
           and "yield 50 MPa" in txt4, txt4)
+
+    print("the zone away from the supports")
+    tip = {"project": "beam", "case": "margin", "fixed": ["Beam.face(-X)"], "refine": False, "save": False,
+           "loads": [{"ref": "Beam.face(+X)", "force": 100, "direction": "-Z"}]}
+    err, txt, _ = c.tool("analyze", dict(tip, support_margin=12))
+    sa12 = num(r"away from the supports: ([\d.]+) MPa", txt)
+    check("support_margin=12 moves it: M·c/I at x = 12 is 52.8 MPa", not err and sa12 and abs(sa12 - 52.8) / 52.8 < 0.02
+          and "(over 12.00 mm from a support)" in txt, txt)
+    err, txt, _ = c.tool("analyze", dict(tip, support_margin=0))
+    check("support_margin=0 → refused", err and "support_margin must be" in txt, txt)
+    err, txt, _ = c.tool("run_script", {"code": ZONE})
+    z = script_result(txt)
+    check("the zone is measured to the support face itself: every point of a grid within 5 mm of a slanted face, and "
+          "no other (the face's bounding box would take all %s)" % z.get("points"),
+          not err and z.get("wrong") == 0 and z.get("near") == 2835 and z.get("points") == 9261, txt)
 
     print("uniform pressure 0.1 MPa on the top face (w = 1 N/mm)")
     err, txt, _ = c.tool("analyze", {"project": "beam", "case": "press", "fixed": ["Beam.face(-X)"],
@@ -367,6 +401,9 @@ def main():
     d = num(r"max displacement ([\d.]+) mm", txt)
     check("…and the single solve is still accurate (within 1 % of the converged tip deflection)",
           d and abs(d - single) / single < 0.01, txt)
+    sa1 = num(r"away from the supports: ([\d.]+) MPa", txt)
+    check("…with the same stress away from the support (%s vs %s MPa): the zone comes from the part, not the mesh"
+          % (sa1, sa), sa1 and abs(sa1 - sa) / sa < 0.015, txt)
 
     print("fea checks in checks.json")
     json.dump([{"id": "strength", "type": "fea_safety", "case": "tip", "min": 3},

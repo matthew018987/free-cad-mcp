@@ -2206,7 +2206,7 @@ def op_analyze(args):
         case.pop("parts", None)
         case.pop("bonded", None)
     for k in ("part", "parts", "bonded", "analysis", "modes", "fixed", "loads", "gravity", "material", "mesh_size",
-              "refine"):
+              "refine", "support_margin"):
         if args.get(k) is not None:
             case[k] = args[k]
     known = ", ".join(sorted(cases)) or "none yet"

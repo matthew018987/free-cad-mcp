@@ -68,7 +68,10 @@ analyze(project="bracket", case="motor_load",
 - **stress**: the largest von Mises stress and where, with the **safety
   factor** against yield. Also the largest stress **away from the supports**:
   a rigid support's edge concentrates stress that a real bolt or clamp
-  spreads, so judge the part there.
+  spreads, so judge the part there. "Away" is further from the support faces
+  than a set distance, which the reply states: the part's thinnest wall (at
+  most 2/3 of its thinnest dimension), the same on every mesh. Set it with
+  `support_margin` (mm) in the case when the part needs another.
 - **converge**: how much a finer mesh changes each result — displacement
   (should change < 3 %), the peak stress and the stress away from the
   supports, each marked ✓/✗ (frequency: f1 < 2 %; buckling: the factor
@@ -101,7 +104,7 @@ update of this plugin or of FreeCAD re-solves the saved cases.
 peak at its rim that grows with every mesh refinement — a modelling artefact
 (a real screw and washer spread the load). Decide up front how the part is
 judged and write the check that way: `fea_safety` with `"away_from_supports":
-true` judges the part a couple of elements away from the supports, and say
+true` judges the part beyond that distance from the supports, and say
 so in the report, with the rim peak. Bearing stress under a screw head in a
 plastic part is real — keep a washer in the design and the margin generous.
 Bracket between two models when it matters: holes only (conservative) vs the

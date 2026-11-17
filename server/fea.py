@@ -109,7 +109,7 @@ def case_hash(case, mats):
     """Identity of a load case and the material(s) it was solved with — results are stale when
     this (or the model) changes. mats: the material of a one-part case, or {label: material}."""
     keep = {k: case.get(k) for k in ("part", "fixed", "loads", "gravity", "mesh_size", "refine")}
-    for k in ("parts", "bonded", "modes"):
+    for k in ("parts", "bonded", "modes", "support_margin"):
         if case.get(k):
             keep[k] = case[k]
     kind = str(case.get("analysis") or "static").strip().lower()
@@ -226,9 +226,10 @@ class Model:
 # ------------------------------------------------------------------ mesh
 
 def default_size(shapes):
-    """(size, note, thinnest wall) — mesh size from the parts: a third of the thinnest overall
-    dimension and at most half the thinnest wall (two second-order elements through it), clamped.
-    Coarsened only when the mesh would be very large — and then the note says so."""
+    """(size, note, thinnest wall, size from the parts alone) — mesh size from the parts: a third
+    of the thinnest overall dimension and at most half the thinnest wall (two second-order elements
+    through it), clamped. Coarsened only when the mesh would be very large — and then the note says
+    so; the last value is the size before that."""
     if not isinstance(shapes, (list, tuple)):
         shapes = [shapes]
     size, wall, vol = None, None, 0.0
@@ -246,7 +247,7 @@ def default_size(shapes):
             pass
         size = s if size is None else min(size, s)
         vol += shape.Volume
-    size = max(0.4, min(20.0, size))
+    size = base = max(0.4, min(20.0, size))
     est = vol / (0.118 * size ** 3)
     note = None
     if est > MAX_ELEMENTS:
@@ -255,7 +256,91 @@ def default_size(shapes):
         note = "mesh coarsened to %.2f mm to keep the solve within a minute or two%s — pass mesh_size to refine " \
                "(slower)" % (size, "; the thinnest wall (%s mm) gets fewer than 2 elements through it, so stress and "
                              "deflection there are less accurate" % an.fmt(wall, 2) if thin else "")
-    return round(size, 3), note, wall
+    return round(size, 3), note, wall, round(base, 3)
+
+
+def support_margin(case, base):
+    """How far from a support the "away from the supports" zone starts (mm): support_margin of the
+    case, else twice the size the parts alone give the mesh, which is their thinnest wall (at most
+    2/3 of their thinnest dimension). It comes from the parts, not from the mesh that was solved,
+    so the stress a part is judged on does not move with mesh_size."""
+    m = case.get("support_margin")
+    if m is None:
+        return 2.0 * base
+    try:
+        m = float(m)
+    except (TypeError, ValueError):
+        m = -1.0
+    if not m > 0:
+        raise FeaError("support_margin must be a distance in mm above 0, got %r" % (case.get("support_margin"),))
+    return m
+
+
+def _sample_faces(faces, step, limit=300000):
+    """Points on solid faces, about `step` apart at most (n, 3): a tessellation's triangles, each
+    filled with a regular grid."""
+    import numpy as np
+    tris = []
+    for f in faces:
+        pts, idx = f.tessellate(max(0.01, min(0.2, step / 5.0)))
+        if idx:
+            p = np.array([(v.x, v.y, v.z) for v in pts], dtype=float)
+            tris.append(p[np.array(idx, dtype=np.int64)])
+    if not tris:
+        return np.zeros((0, 3))
+    t = np.concatenate(tris)                                     # (m, 3 corners, xyz)
+    longest = np.sqrt(np.max([((t[:, i] - t[:, (i + 1) % 3]) ** 2).sum(axis=1) for i in range(3)], axis=0))
+    n = np.maximum(1, np.ceil(longest / step)).astype(np.int64)
+    total = int(((n + 1) * (n + 2) // 2).sum())
+    if total > limit:                    # very large faces: a coarser grid (the zone's rim loses a little)
+        n = np.maximum(1, np.ceil(n / math.sqrt(total / float(limit)))).astype(np.int64)
+    out = []
+    for k in np.unique(n):
+        i, j = np.meshgrid(np.arange(k + 1), np.arange(k + 1), indexing="ij")
+        keep = i + j <= k
+        w = np.stack([i[keep], j[keep], k - i[keep] - j[keep]], axis=1) / float(k)
+        out.append(np.einsum("qc,mcd->mqd", w, t[n == k]).reshape(-1, 3))
+    return np.concatenate(out)
+
+
+def _within(xyz, pts, r):
+    """Which of the points xyz (n, 3) lie within r of any of pts (m, 3). A grid of r-sized cells:
+    a point is compared with the pts of its own cell and of the 26 around it."""
+    import numpy as np
+    out = np.zeros(len(xyz), dtype=bool)
+    if not len(pts) or not len(xyz) or r <= 0:
+        return out
+    cand = np.flatnonzero(((xyz >= pts.min(axis=0) - r) & (xyz <= pts.max(axis=0) + r)).all(axis=1))
+    if not len(cand):
+        return out
+    lo = pts.min(axis=0) - 2.0 * r                               # so a candidate's neighbour cells are ≥ 0
+    cp = np.floor((pts - lo) / r).astype(np.int64)
+    cx = np.floor((xyz[cand] - lo) / r).astype(np.int64)
+    dims = cp.max(axis=0) + 3                                    # … and below dims
+
+    def key(c):
+        return (c[:, 0] * dims[1] + c[:, 1]) * dims[2] + c[:, 2]
+    kp = key(cp)
+    order = np.argsort(kp, kind="stable")
+    kp, pts = kp[order], pts[order]
+    cells, start, count = np.unique(kp, return_index=True, return_counts=True)
+    found = np.zeros(len(cand), dtype=bool)
+    for off in ((a, b, c) for a in (0, -1, 1) for b in (0, -1, 1) for c in (0, -1, 1)):
+        todo = np.flatnonzero(~found)
+        if not len(todo):
+            break
+        k = key(cx[todo] + np.array(off, dtype=np.int64))
+        i = np.minimum(np.searchsorted(cells, k), len(cells) - 1)
+        hit = cells[i] == k
+        rows, first, n = todo[hit], start[i[hit]], count[i[hit]]
+        for j in range(int(n.max()) if len(n) else 0):
+            m = (n > j) & ~found[rows]
+            if not m.any():
+                break
+            d = xyz[cand[rows[m]]] - pts[first[m] + j]
+            found[rows[m][(d * d).sum(axis=1) <= r * r]] = True
+    out[cand[found]] = True
+    return out
 
 
 class Mesh:
@@ -411,7 +496,7 @@ def _ids(f, ids, per=16):
         f.write(", ".join(str(x) for x in ids[i:i + per]) + "\n")
 
 
-def _resolve(model, case, mats, kind, size):
+def _resolve(model, case, mats, kind, size, margin):
     """Supports, loads and bonded pairs as solid faces, checked before anything is meshed."""
     fixed_faces, fixed_labels, fixed_parts = [], [], set()
     for ref in case.get("fixed") or []:
@@ -496,7 +581,8 @@ def _resolve(model, case, mats, kind, size):
         raise FeaError("%s %s neither supported nor bonded to a supported part — add fixed=[…] on it or a bonded "
                        "pair that joins it to one" % (", ".join(free), "is" if len(free) == 1 else "are"))
     return {"fixed_faces": fixed_faces, "fixed_labels": fixed_labels, "loads": loads, "gravity": grav,
-            "bonds": bonds, "applied": applied, "load_scale": scale, "load_lines": load_lines}
+            "bonds": bonds, "applied": applied, "load_scale": scale, "load_lines": load_lines,
+            "fixed_points": _sample_faces([model.compound.Faces[j] for j in fixed_faces], margin / 6.0)}
 
 
 def _sets(model, mesh, plan):
@@ -778,7 +864,7 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
     s = {"size": size, "nodes": mesh.nodes, "elements": mesh.elements, "xyz": mesh.xyz, "surface": mesh.surface,
          "npart": mesh.npart, "applied": plan["applied"], "load_scale": plan["load_scale"],
          "fixed": plan["fixed_labels"], "loads": plan["load_lines"],
-         "fixed_boxes": [model.compound.Faces[j].BoundBox for j in plan["fixed_faces"]],
+         "fixed_points": plan["fixed_points"],
          "ccx_seconds": round(t_ccx, 2), "mesh_seconds": round(t_mesh, 2),
          "warnings": [ln.strip() for ln in out_lines if "*WARNING" in ln and "gentiedmpc" not in ln]}
     # a follower node with no face of the other part within the tolerance stays untied (ccx warns per node)
@@ -826,11 +912,7 @@ def _summary(s, model, mats, margin):
     import numpy as np
     xyz, vm = s["xyz"], s["vm"]
     dl = np.linalg.norm(s["U"], axis=1)
-    near = np.zeros(len(vm), dtype=bool)
-    for bb in s["fixed_boxes"]:
-        near |= ((xyz[:, 0] >= bb.XMin - margin) & (xyz[:, 0] <= bb.XMax + margin) &
-                 (xyz[:, 1] >= bb.YMin - margin) & (xyz[:, 1] <= bb.YMax + margin) &
-                 (xyz[:, 2] >= bb.ZMin - margin) & (xyz[:, 2] <= bb.ZMax + margin))
+    near = _within(xyz, s["fixed_points"], margin)       # by distance to the fixed faces themselves
 
     def peak(mask, vals):
         if not mask.any():
@@ -916,15 +998,15 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
                            "or parts.%s.density_g_cm3, or give material={…, \"density\": g/cm³}" % (
                                "a frequency analysis" if kind == "frequency" else "self weight", miss[0], miss[0]))
     notes = []
-    size, note, wall = default_size(model.shapes)
+    size, note, wall, base = default_size(model.shapes)
     if mesh_size:
         size = float(mesh_size)
     elif note:
         notes.append(note)
     work = os.path.join(out_dir, "ccx")
-    margin = 2.0 * size              # "away from the supports" zone, fixed by the first mesh
+    margin = support_margin(case, base)
     summ = (lambda s: _summary(s, model, mlist, margin)) if kind == "static" else (lambda s: _mode_summary(s, kind))
-    plan = _resolve(model, case, mlist, kind, size)
+    plan = _resolve(model, case, mlist, kind, size, margin)
     s1 = _solve(model, plan, mlist, size, work, kind, modes, deadline)
     r1 = summ(s1)
     final, s_final, r2 = r1, s1, None
@@ -951,6 +1033,8 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
                fixed=s1["fixed"], loads=s1["loads"], applied=list(s1["applied"]), coarse=r1 if r2 else None,
                notes=notes, ccx_seconds=round(s1["ccx_seconds"] + (s_final["ccx_seconds"] if r2 else 0.0), 2),
                threads=threads(), method=METHOD, versions=versions())
+    if kind == "static":
+        res["support_margin"] = round(margin, 3)
     if len(model.parts) == 1:
         res["part"] = model.labels[0]
     else:
@@ -1145,15 +1229,19 @@ def _report_static(lines, res):
                                                                         f(p["safety_factor_away"], 2))
                              if p.get("max_vm_away") is not None and abs(p["max_vm_away"] - p["max_vm"]) > 1e-9
                              else "", f(p["max_disp"], 4)))
-        lines.append("          → governing: %s, safety factor %s" % (res.get("governing_part"), f(sf, 2)))
+        lines.append("          → governing: %s, safety factor %s%s" % (
+            res.get("governing_part"), f(sf, 2), "  (away from the supports: over %s mm from a support)"
+            % f(res.get("support_margin", 0), 2) if any(p.get("max_vm_away") is not None for p in per) else ""))
     else:
         lines.append("stress    max von Mises %s MPa at (%s)%s" % (
             f(res["max_vm"], 3), an._pt(Vector(*res["max_vm_at"]), 2),
             "  → safety factor %s against yield %.0f MPa" % (f(sf, 2), m["yield"]) if sf else ""))
         if res.get("max_vm_away") is not None and abs(res["max_vm_away"] - res["max_vm"]) > 1e-9:
-            lines.append("          away from the supports: %s MPa at (%s)  → safety factor %s" % (
-                f(res["max_vm_away"], 3), an._pt(Vector(*res["max_vm_away_at"]), 2),
-                f(m["yield"] / res["max_vm_away"], 2) if res["max_vm_away"] > 1e-12 else "∞"))
+            lines.append("          away from the supports: %s MPa at (%s)  → safety factor %s  (over %s mm from a "
+                         "support)" % (
+                             f(res["max_vm_away"], 3), an._pt(Vector(*res["max_vm_away_at"]), 2),
+                             f(m["yield"] / res["max_vm_away"], 2) if res["max_vm_away"] > 1e-12 else "∞",
+                             f(res.get("support_margin", 0), 2)))
     lines.append("deflect   max displacement %s mm at (%s), direction (%s)" % (
         f(res["max_disp"], 4), an._pt(Vector(*res["max_disp_at"]), 2), an._pt(Vector(*res["max_disp_vec"]), 4)))
     if res.get("change"):

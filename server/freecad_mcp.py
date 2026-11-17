@@ -1947,7 +1947,8 @@ def t_analyze(args, request_id=None):
     from fea.json, merged with any given arguments, solved after a rebuild."""
     pdir = project_dir(args.get("project"))
     wargs = {k: args.get(k) for k in ("case", "part", "parts", "bonded", "analysis", "modes", "fixed", "loads",
-                                      "gravity", "material", "mesh_size", "refine", "save", "params")}
+                                      "gravity", "material", "mesh_size", "refine", "support_margin", "save",
+                                      "params")}
     wargs["project_dir"] = pdir
     wargs["timeout"] = int(args.get("timeout", 900))      # the worker stops CalculiX in time
     return maybe_background("analyze", args, "analyze", wargs, int(args.get("timeout", 900)), request_id,
@@ -2794,6 +2795,9 @@ TOOLS = [
                           "refine": {"type": "boolean", "description": "Also solve on a finer mesh: default only when "
                                                                        "the first mesh is small; true forces it, false "
                                                                        "skips it."},
+                          "support_margin": {"type": "number", "description": "How far from a support (mm) the "
+                                             "\"away from the supports\" stress starts (default from the part: its "
+                                             "thinnest wall, at most 2/3 of its thinnest dimension)."},
                           "save": {"type": "boolean", "description": "Save the case in fea.json (default true)."},
                           "params": {"type": "object", "description": "What-if parameter overrides: builds a variant "
                                      "and solves it without touching params.json, the saved case or its result."},
