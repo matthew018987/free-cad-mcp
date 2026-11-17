@@ -1,6 +1,6 @@
 # FEA: fixes, gaps and new features (plan)
 
-Status: **phase 1 in progress** · 2026-11-17 · decisions in §6 · branch `feature/fea-fixes`, from `main` at `50e95a4` · FreeCAD 1.1.3 on Linux (cloud sessions), 1.1.4 on the Mac
+Status: **phase 1 built** · 2026-11-17 · decisions in §6 · branch `feature/fea-fixes`, from `main` at `50e95a4` · tested on Linux with FreeCAD 1.1.3 (cloud session); the run on the Mac with 1.1.4 is still to do
 
 **Goal.** An `analyze` result is evidence a release can rest on. Three phases,
 in this order: fix what gives or allows a misleading answer today, fill the
@@ -22,19 +22,20 @@ Sizes use the roadmap's scale (S < M < L, with M5 itself an L).
 | # | Item | Size | State |
 |---|---|---|---|
 | 0 | A Linux test bed: FreeCAD, CalculiX and gmsh from conda-forge | S | done |
-| 1.1 | Results carry a method version and go stale when it changes | S | planned |
-| 1.2 | Benchmarks beyond beams: a hole, a curved face under pressure, a lug | M | planned |
-| 1.3 | Brittle materials judged on principal stress | S | planned |
-| 1.4 | "Away from the supports" by distance, with a margin set by the part | S | planned |
-| 1.5 | Bearing load for pins, screws and shafts in holes | M | planned |
-| 1.6 | An unconverged result fails its checks | S | planned |
-| 1.7 | Warnings outside the linear range | S | planned |
-| 1.8 | Frequency results say what they leave out | S | planned |
-| 1.9 | Loads that balance each other are not "out of balance" | S | planned |
+| 1.1 | Results carry a method version and go stale when it changes | S | done |
+| 1.2 | Benchmarks beyond beams: a hole, a curved face under pressure, a lug | M | done |
+| 1.3 | Brittle materials judged on principal stress | S | done |
+| 1.4 | "Away from the supports" by distance, with a margin set by the part | S | done |
+| 1.5 | Bearing load for pins, screws and shafts in holes | M | done |
+| 1.6 | An unconverged result fails its checks | S | done |
+| 1.7 | Warnings outside the linear range | S | done |
+| 1.8 | Frequency results say what they leave out | S | done |
+| 1.9 | Loads that balance each other are not "out of balance" | S | done (found by 1.2) |
+| 1.10 | The same mesh on every run, and no element folded over | S | done (found by 1.2) |
 | 2.1 | Supports: sliding, symmetry, pinned, bolt-like | M + L | planned |
 | 2.2 | Loads: torque, remote force, gravity direction and g-loads, carried mass | M | planned |
 | 2.3 | Results: reaction per support, values at a named face or hole, layer strength for prints | M | planned |
-| 2.4 | Mesh: local refinement, quality numbers | M | planned |
+| 2.4 | Mesh: local refinement, quality numbers, less scatter in the peak | M | planned |
 | 2.5 | NAFEMS benchmarks LE1 and LE10 | S | planned |
 | 3.1 | FEA report in the release package | M | planned |
 | 3.2 | ParaView export | S | planned |
@@ -49,139 +50,195 @@ Linux:
 
 ```sh
 micromamba create -y -p /opt/freecad -c conda-forge freecad=1.1.3 python=3.11 calculix gmsh matplotlib-base
-PATH=/opt/freecad/bin:$PATH python3 tests/test_fea.py
+for b in freecadcmd ccx gmsh; do ln -sf /opt/freecad/bin/$b /usr/local/bin/$b; done
+python3 tests/test_fea.py
 ```
 
-The server finds `freecadcmd` on `PATH` (`find_freecad`), FreeCAD finds `ccx`
-and `gmsh` beside it. That build has numpy and matplotlib but no scipy, so
-`fea.py` stays numpy-only. Its gmsh mesh object defaults to curved second-order
-elements (`SecondOrderLinear` off) and curvature sizing of 12 elements per
-turn, so holes and fillets are not meshed as polygons.
+The server finds `freecadcmd` on `PATH` (`find_freecad`), and FreeCAD finds
+`ccx` and `gmsh` there too. That build has numpy and matplotlib but no scipy,
+so `fea.py` stays numpy-only.
+
+At `main`, `tests/test_fea.py` passed on Linux as it does on the Mac. So did
+`test_sheet_metal`, `test_tolerancing`, `test_verification` and `test_viewer`.
+The other suites fail there for reasons that have nothing to do with FEA: they
+look for `FreeCAD.app` bundles, or need the FreeCAD GUI for drawings. Making
+them run on Linux is outside this plan.
 
 ## 2. Phase 1: wrong
 
-"Wrong" means the tool gives, or lets a check pass on, a misleading answer.
+"Wrong" means the tool gave, or let a check pass on, a misleading answer.
 
 ### 1.1 Results carry a method version
 
-A result is stale when the geometry (`geom_sig`), the case or the material
-(`case_hash`) changes. Nothing ties it to the code that produced it, so after
-any fix below an old `result.json` would still count as evidence in `release`.
+A result was stale when the geometry (`geom_sig`), the case or the material
+(`case_hash`) changed. Nothing tied it to the code that produced it, so after
+any fix below an old `result.json` would still have counted as evidence in
+`release`.
 
 - `fea.METHOD`, an integer raised whenever the same case on the same geometry
-  would give different numbers. It goes into the result and the check: a
-  result from another method is stale.
-- The result records the CalculiX, gmsh and FreeCAD versions. A result solved
-  with another CalculiX or gmsh version is stale too.
+  would give different numbers. It is in every result, and a result from
+  another method is stale (`fea.outdated`). This phase is method 2.
+- The result records the CalculiX, gmsh and FreeCAD versions, and the report
+  ends with a `solver` line. A result solved by another CalculiX or gmsh is
+  stale too.
 
 ### 1.2 Benchmarks beyond beams
 
-`tests/test_fea.py` proves bars with flat faces: a cantilever, a column, two
-bonded layers. Real parts fail at holes and fillets. New cases with textbook
-answers, in `tests/test_fea_benchmarks.py`:
+`tests/test_fea.py` proved bars with flat faces. Real parts fail at holes and
+fillets. `tests/test_fea_benchmarks.py` adds cases with answers from theory,
+solved at the default mesh:
 
-- **Plate with a hole in tension**: the peak stress at the hole edge against
-  the stress concentration factor for a finite-width plate (Heywood:
-  Ktn = 2 + (1 - d/W)^3 on the net section).
-- **Thick cylinder under internal pressure** (Lamé): hoop stress, von Mises
-  and the largest principal stress at the bore, away from the held end. This
-  also proves a pressure on a curved face.
-- **Pin-loaded lug**: for the bearing load of 1.5.
+| Case | Quantity | Theory | Result |
+|---|---|---|---|
+| Strip with a hole, pulled (Ø10 in 50 × 5, 5 kN) | peak stress at the hole | 62.8 MPa (Heywood, Ktn = 2 + (1 - d/W)³) | 61.7 MPa, -1.8 % |
+| Thick tube, 10 MPa inside (Ø40 / Ø20) | von Mises at the bore | 23.33 MPa (Lamé) | 23.80 MPa, +2.0 % |
+| | largest principal stress, acrylic | 16.67 MPa (Lamé) | 18.24 MPa, +9 %; 17.41 MPa on a 2 mm mesh |
+| Lug pulled by a pin (Ø12 in 30 × 6, 1 kN) | peak contact pressure | 17.68 MPa (4F / (π d t)) | 17.66 MPa |
+| | stress beside the hole | | 26.2 MPa with `bearing`, 13.6 MPa with `force` |
+
+What the benchmarks showed:
+
+- Curved faces were meshed well: FreeCAD's gmsh object defaults to curved
+  second-order elements and to 12 elements per turn.
+- Two defects nobody had seen: 1.9 and 1.10.
+- The tube's held end stops it widening there. The disturbance overshoots
+  Lamé's hoop stress by 4 % some 30 mm along and has died out by 45 mm, so
+  the benchmark judges the tube beyond that with `support_margin`.
+- A peak is the largest of the nodal values. In a uniform field these scatter
+  about the true value, so the peak errs on the safe side: 2 % for von Mises,
+  up to 9 % for a principal stress at ν 0.37. Taking mid-side values from
+  their corner nodes cut that to 3 % but lowered the peak at the hole by
+  3 % too, so the nodal values stay as CalculiX gives them (2.4).
+- The strip's peak still rises with the mesh (60.0, 61.7, 63.6 MPa at 2.5,
+  1.67 and 1.25 mm): the stress at mid-thickness is a little above the
+  plane-stress value the formula gives.
 
 ### 1.3 Brittle materials judged on principal stress
 
-The material table marks resin, acrylic and PMMA as brittle ("treat the yield
-as the breaking stress"), but every safety factor is yield / von Mises. Von
+The material table marked resin, acrylic and PMMA as brittle ("treat the yield
+as the breaking stress"), but every safety factor was yield / von Mises. Von
 Mises is a yield criterion for ductile materials. A brittle material breaks on
 its largest principal stress, which von Mises understates where tension acts
-in more than one direction (a notch root, a constrained face).
+in more than one direction (a notch root, a held face).
 
-- `fea.py` computes the principal stresses at every node and reports the
-  largest tensile and the largest compressive one, with where.
-- A material has a `brittle` flag (the table sets it; `material={…, "brittle":
-  true}` or `parts.<Part>.brittle` override it). A brittle part is judged on
-  its largest principal stress by size, tension or compression, against the
-  breaking stress. That is conservative in compression, where brittle
-  materials are stronger.
-- The report and the checks say which criterion each part was judged on.
+- `fea.py` computes the principal stresses at every node. The `principal`
+  line reports the largest tension and the largest compression, with where.
+- A material has a `brittle` flag (`standards.BRITTLE` sets it;
+  `material={…, "brittle": true}` or `parts.<Part>.brittle` override it). A
+  brittle part is judged on its largest principal stress by size, tension or
+  compression, against the breaking stress. That is on the safe side in
+  compression, where brittle materials are stronger.
+- The report and the checks name the criterion each part was judged on.
+
+On the acrylic tube of 1.2 the safety factor is 70 / 18.2 = 3.8, where
+von Mises would have said 70 / 23.3 = 3.0. In a notch the difference goes the
+other way.
 
 ### 1.4 "Away from the supports" by distance
 
 A rigid support inflates the stress at its edge, so the result also gives the
 peak "away from the supports", and `away_from_supports` checks judge the part
-there. Today that zone is each fixed face's bounding box grown by two element
-sizes. For a slanted face or a large bore the box takes in material far from
-the support and can hide a real peak. The zone also shrinks with a smaller
-`mesh_size`, so the judged number depends on the mesh.
+there. That zone was each fixed face's bounding box grown by two element
+sizes. For a slanted face or a large bore the box took in material far from
+the support and could hide a real peak. The zone also shrank with a smaller
+`mesh_size`, so the judged number moved with the mesh.
 
 - The zone is every node within the margin of a fixed face, by distance to
-  the face itself.
+  the face itself (`fea._sample_faces`, `fea._within`).
 - The margin comes from the part, not the mesh: twice the automatic mesh
   size, which is the thinnest wall (at most 2/3 of the part's thinnest
-  dimension). `support_margin` in the case overrides it. The result states it.
+  dimension). `support_margin` in the case overrides it. The result states
+  it.
+
+The cantilever's stress away from its support is now 56.1 MPa at a 3.33 mm
+and at a 1.5 mm mesh, while the peak at the support edge grows from 60.6 to
+68.7 MPa.
 
 ### 1.5 Bearing load
 
 A `force` on a hole is spread over the whole wall as one traction. Half of it
-pulls on the far side, which a pin, screw or shaft cannot do. The contact
-pressure comes out four times lower than the usual cosine bearing distribution
-(peak 4F / (π d t)), and the material beside the hole carries too little.
-Stress and deflection far from the hole are right.
+pulls on the far side, which a pin, screw or shaft cannot do.
 
-- A new load: `{"ref": "Lug.holes(d=10)", "bearing": 500, "direction": "+X"}`.
-  The pressure only pushes, on the side the load presses on, in proportion to
-  the cosine of the angle to the load, scaled so the resultant is the force.
-  The same rule serves a boss or shaft pushed by a hub.
+- A new load: `{"ref": "Lug.holes(d=12)", "bearing": 1000, "direction": "+X"}`.
+  The pressure only pushes, on the side of the wall the load presses
+  against, in proportion to the cosine of the angle to the load, scaled so
+  the resultant is the force exactly. The same rule serves a boss pushed by
+  a hub.
+- A stepped hole takes the load on its smallest diameter; `"d"` in the load
+  picks another. The direction must be across the axis.
 - A plain `force` across a hole axis still works and adds a note that names
-  `bearing`. `fea.md` describes loads from pins, screws and shafts as bearing
-  loads.
+  `bearing`. `fea.md` describes loads from pins, screws and shafts as
+  bearing loads.
+
+On the lug of 1.2 the stress beside the hole is 26.2 MPa with the bearing
+load and 13.6 MPa with the force: the force gave about half.
 
 ### 1.6 An unconverged result fails its checks
 
-A check on a quantity that did not converge passed with a note. A result that
-was never solved on a second mesh said nothing at all. The release README
-printed only the tick and the value.
+A check on a quantity that did not converge passed with a note, and a result
+that was never solved on a second mesh said nothing at all.
 
-- A `fea_*` check fails when its quantity did not converge, or when no
-  second mesh was solved, unless the check sets `"accept_unconverged": true`.
-  An accepted check says so in its value.
+- A `fea_*` check fails when its quantity did not converge between the two
+  meshes, or when the case was solved on one mesh, unless the check sets
+  `"accept_unconverged": true`. An accepted check says so in its value.
 - No more skipped convergence checks: when a finer mesh would be too large,
   the second solve uses a coarser mesh (size × 1.5) and the first mesh stays
   the result. Only `refine=false` solves once.
-- The release README's verification table carries each check's basis and
-  notes.
+
+The plan also said the release README dropped the note. That was wrong: the
+release takes each check's whole line from the build report, so the basis and
+any note were always in the README's verification table.
+
+A two-mesh comparison does not catch every singularity. The cantilever's peak
+at its held edge changes 1 % between the default meshes and 14 % between a
+1.5 and a 1 mm mesh. The note "the peak is at a support" and
+`away_from_supports` remain the way to judge such a part.
 
 ### 1.7 Warnings outside the linear range
 
-The analysis is linear: small deflections, stress below yield. Outside that
-range the numbers are not physical, and nothing said so.
+The analysis is linear: small deflections, stress below the strength. Outside
+that range the numbers are not physical, and nothing said so.
 
-- **Beyond yield**: when the judged stress away from the supports exceeds the
-  strength, the result says the part yields (or breaks) and that the
+- **Beyond yield**: when the judged stress away from the supports is above
+  the strength, the result says the part yields (or breaks) and that the
   deflection is larger than shown. A `fea_displacement` check on such a
   result fails.
-- **Large deflection**: when the largest displacement exceeds 5 % of the
-  part's longest dimension, the result says small-deflection theory no longer
-  holds. Checks on it carry the note.
+- **Large deflection**: when the largest displacement is over 5 % of the
+  parts' longest dimension, the result says a linear analysis is only
+  approximate. Checks on it carry the note.
 
 ### 1.8 Frequency results say what they leave out
 
-`fea.md` says to keep the first natural frequency above the motor speed. The
+`fea.md` said to keep the first natural frequency above the motor speed. The
 analysis has only the part's own mass and rigid supports: the mass of what
 the part carries lowers the real frequency, and real supports lower it again.
-Until 2.2 adds carried mass, every frequency result and the docs say that the
-computed frequency is an upper bound.
+Until 2.2 adds carried mass, every frequency result and `fea.md` call the
+computed frequencies upper bounds.
 
 ### 1.9 Loads that balance each other
 
-The equilibrium line compares the support reactions with the applied
-resultant. When the loads balance each other (pressure inside a bore, two
-opposing forces) the resultant is zero and the report says "out of balance by
-0.0 %". The balance is now measured against the size of the loads, not their
-resultant.
+The equilibrium line compared the support reactions with the applied
+resultant. For loads that balance each other (pressure inside a bore, two
+opposing forces) the resultant is zero, and the report said "✗ out of balance
+by 0.0 %". The balance is now measured against the size of the loads.
+
+### 1.10 The same mesh on every run, and no element folded over
+
+Two defects in the mesh, found by the tube of 1.2:
+
+- gmsh ran on every core and returned a different mesh on each run, so the
+  same case gave different numbers each time (the peak at a support edge
+  moved by over 1 %). It now runs on one thread, at no cost in time: 14 s
+  either way for 300 000 nodes.
+- On curved parts a few curved elements could fold over (a Jacobian
+  determinant ≤ 0). CalculiX then stopped, and the tool blamed the supports.
+  The tube failed this way at 3.33 mm, the size its own refined solve uses.
+  gmsh's high-order optimiser now untangles them, any that remain get
+  straight edges, the `mesh` line ends with the worst scaled Jacobian, and
+  the message names the mesh.
 
 Every saved case is re-solved after this phase (1.1), and a check that passed
-on an unconverged or a support-edge stress may now fail.
+on an unconverged stress may now fail.
 
 ## 3. Phase 2: incomplete
 
@@ -218,13 +275,17 @@ Every support holds all three directions (`*BOUNDARY FIXED, 1, 3`).
 
 ### 2.4 Mesh
 
-Local refinement at small fillets and holes, and mesh quality numbers (worst
-element, count of poor elements) in the result.
+- Local refinement at small fillets and holes.
+- Mesh quality beyond the scaled Jacobian of 1.10: the shape of the worst
+  element, and how many are poor.
+- Less scatter in the peak (1.2): a stress recovery that does not lower real
+  peaks, for example from the integration points.
 
 ### 2.5 NAFEMS benchmarks
 
 LE1 (elliptic membrane) and LE10 (thick plate) need symmetry supports (2.1)
-and a stress at a point (2.3). They join the benchmark suite here.
+and a stress at a point (2.3). They join the benchmark suite here, with a
+handbook value for the lug's stress concentration.
 
 ## 4. Phase 3: new features
 
@@ -287,3 +348,5 @@ branch: `feature/fea-fixes`, then one per phase 2 and 3 item or group.
 | 2026-11-17 | An unconverged result fails its check (1.6); `accept_unconverged` is the explicit way out |
 | 2026-11-17 | The cloud test bed installs FreeCAD from conda-forge |
 | 2026-11-17 | The FEA report is Markdown first, in the NAFEMS layout |
+| 2026-11-17 | gmsh runs on one thread: the same mesh on every run (1.10) |
+| 2026-11-17 | Nodal stresses stay as CalculiX gives them: corner-averaged mid-side values lowered the peak at a hole (1.2) |
