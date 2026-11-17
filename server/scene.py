@@ -19,9 +19,9 @@ import Import
 
 import viewer
 
-SUBDIR = os.path.join("build", "viewer")
-GLB = "scene.glb"
-JSON = "scene.json"
+SUBDIR = viewer.SUBDIR
+GLB = viewer.GLB
+JSON = viewer.SCENE_JSON
 enabled = viewer.enabled
 
 

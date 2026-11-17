@@ -252,7 +252,7 @@ fc.mate(motor, "mount", fc.frame_on(fc.face(base, "-Z")), mode="against")
 | 4 | `read_file` | Read a text file with line numbers | path, line range |
 | 5 | `write_file` | Create or overwrite (`.bak`) | path, content, overwrite |
 | 6 | `edit_file` | Exact unique-match replace (`.bak`) | path, old, new, replace_all |
-| 7 | **`build`** | Run `model.py` and save the `.FCStd` → **build report** (§7.1) plus an iso render | `project, params?, variant?, views?, wait?` |
+| 7 | **`build`** | Run `model.py` and save the `.FCStd` → **build report** (§7.1) plus an iso render; the chat shows the live 3D view with the result | `project, params?, variant?, views?, wait?` |
 | 8 | `run_script` | Run any FreeCAD Python against a doc or STEP (patch or query) | `code, doc?, save: no\|revision\|inplace` → stdout, `fc.result(...)` data, change summary |
 | 9 | `inspect` | Model tree and geometry index | `doc, object?, level: summary\|object\|sketch\|params` (§7.2) |
 | 10 | `render` | Headless images (§7.3) | `doc, views[], objects?, highlight?, style: shaded\|xray\|drawing, section?, scale?` → one PNG grid |
@@ -264,6 +264,7 @@ fc.mate(motor, "mount", fc.frame_on(fc.face(base, "-Z")), mode="against")
 | 16 | `export` | STEP, STL, 3MF, BREP, IGES, OBJ; DXF/SVG for sections and projections | `doc, objects, format, tolerance?` |
 | 17 | `open_in_gui` | Open the file in FreeCAD, launching it if needed; `viewer=true` opens the live 3D view in the browser | `path, viewer?` |
 | 18 | `job_status` | Poll or collect background work | `job_id?, wait_seconds?` |
+| 19 | `viewer_data` | For the 3D view in the chat, not for Claude: the last build's scene, then its model in chunks | `project, have?, model?, offset?` → JSON |
 
 Every tool that takes `doc` accepts `.FCStd`, `.step`/`.stp`, `.brep` or
 `.stl`, so a vendor STEP can be inspected or rendered without importing it
@@ -531,6 +532,28 @@ them and shows the build it carries, marked *snapshot*. There is no web
 server, so nothing listens on a port. The page renders only when something
 changed, keeps the camera across rebuilds, and draws section caps with the
 stencil buffer.
+
+**Live view: inline in the chat.** The user should not have to know that the
+page exists, so the server is also an MCP App (SEP-1865). `build` carries
+`_meta.ui.resourceUri = ui://freecad/viewer.html`, and `resources/read`
+returns the same page with no build in it (`viewer.app_page()`, MIME
+`text/html;profile=mcp-app`). A chat app that supports the extension (Cowork,
+Claude desktop) frames the page with every `build` call and relays JSON-RPC
+over `postMessage`. `viewer.js` does the handshake itself (`ui/initialize`,
+no SDK): it takes the project from the call's arguments
+(`ui/notifications/tool-input`), asks for 520 px of height, applies the
+host's theme, and offers *Full screen* when the host has that display mode.
+The frame is sandboxed with no network and cannot read the project's files,
+so it asks the server through the host: `viewer_data` (visible to the app
+only) returns `scene.json`, or just its version when the view already shows
+it, and then `scene.glb` in 384 kB chunks whose base64 joins into the file's
+(a single reply could exceed a host's size limit for tool results). The
+model never passes through Claude's context. The view asks again when the
+result arrives and every 3 s while it is on screen, so it follows later
+builds, including a background build's, and stops when scrolled away or torn
+down (it then gives its WebGL context back: a chat can hold many views). A
+client that does not show MCP Apps ignores all of this and gets the page's
+path in the first build's reply, as before.
 
 Why not render Claude's images this way too? Claude only sees PNGs in tool
 results and can't turn a page, and a headless browser would add a Chromium

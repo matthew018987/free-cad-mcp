@@ -27,7 +27,7 @@ try:
 
     tools = c.rpc("tools/list")["result"]["tools"]
     names = sorted(t["name"] for t in tools)
-    check("tools/list returns 22 tools", len(names) == 22, ", ".join(names))
+    check("tools/list returns 23 tools", len(names) == 23, ", ".join(names))
 
     err, txt, _ = c.tool("freecad_status")
     st = json.loads(txt)

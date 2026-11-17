@@ -20,7 +20,7 @@ Commands:
 - `/freecad-design:drawing` makes or edits drawings.
 - `/freecad-design:release` builds the supplier package.
 
-**Live view.** With your OK, Claude can install the *MCP Reload* helper into FreeCAD (`open_in_gui` with `install_reload_helper`). After that, documents open in FreeCAD reload whenever Claude rebuilds them. Your camera position is kept, and a document with unsaved edits is never reloaded.
+**Live view.** In Cowork and the Claude desktop app, every build shows the model in the chat as a 3D view you can rotate, section and measure; it follows later builds while it is on screen. The same view is saved as `build/viewer/<name>.html` in the project. With your OK, Claude can install the *MCP Reload* helper into FreeCAD (`open_in_gui` with `install_reload_helper`). After that, documents open in FreeCAD reload whenever Claude rebuilds them. Your camera position is kept, and a document with unsaved edits is never reloaded.
 
 ## Data
 

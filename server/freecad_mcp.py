@@ -60,6 +60,12 @@ SERVER_NAME = "freecad"
 SERVER_VERSION = "0.5.0"
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL = "2025-06-18"
+# MCP Apps (SEP-1865): the build tool names this resource, and a chat app that supports the extension
+# shows it inline with every build's result. The page is the live 3D view (viewer.py).
+UI_EXTENSION = "io.modelcontextprotocol/ui"
+VIEW_URI = "ui://freecad/viewer.html"
+VIEW_MIME = "text/html;profile=mcp-app"
+VIEW_META = {"ui": {"prefersBorder": True}}             # no csp: the page loads nothing from the network
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(HERE, "worker.py")
@@ -1217,6 +1223,7 @@ def t_edit_file(args):
 
 
 _viewer_linked = set()          # projects whose build output already named the viewer page
+_client = {"ui": False}         # whether the client said (at initialize) that it shows MCP Apps
 
 
 def _append_text(content, extra):
@@ -1268,9 +1275,35 @@ def t_build(args, request_id=None):
     page = vw.find_page(pdir) if vw.enabled() and data.get("rev") and not args.get("variant") else None
     if page and pdir not in _viewer_linked:
         _viewer_linked.add(pdir)
-        out = _append_text(out, "viewer   %s (live 3D view that follows every build; open_in_gui(viewer=true) "
-                                "opens it in the user's browser)" % _rel(page, pdir))
+        if _client["ui"]:
+            out = _append_text(out, "viewer   the user sees the live 3D view inline with every build's result "
+                                    "(rotate, section, measure); the same page is %s, and open_in_gui(viewer=true) "
+                                    "opens it in their browser" % _rel(page, pdir))
+        else:
+            out = _append_text(out, "viewer   %s (live 3D view that follows every build; open_in_gui(viewer=true) "
+                                    "opens it in the user's browser)" % _rel(page, pdir))
     return out
+
+
+def t_viewer_data(args):
+    """What the inline 3D view asks for: the project's scene (status, checks, parts), then its GLB in chunks."""
+    if not vw.enabled():
+        raise ToolError("the live 3D view is off (FREECAD_MCP_VIEWER=0)")
+    pdir = project_dir(args.get("project"))
+    scene = vw.read_scene(pdir)
+    if args.get("model") is not None:
+        offset = int(args.get("offset") or 0)
+        if not scene or not scene.get("glb") or scene.get("model") != args["model"] or offset < 0:
+            return json.dumps({"stale": True})          # a newer build replaced the model: ask for the scene again
+        try:
+            data, total = vw.glb_chunk(pdir, offset)
+        except OSError:
+            return json.dumps({"stale": True})
+        return json.dumps({"model": args["model"], "offset": offset, "next": offset + len(data), "total": total,
+                           "data": base64.b64encode(data).decode("ascii")})
+    if scene and args.get("have") == scene.get("version"):
+        return json.dumps({"version": scene["version"]})
+    return json.dumps({"scene": scene}, default=str)
 
 
 def t_run_script(args, request_id=None):
@@ -2497,6 +2530,7 @@ TOOLS = [
                           "new_text": {"type": "string"}, "project": _PROJECT,
                           "replace_all": {"type": "boolean"}}, ["path", "old_text", "new_text"])},
     {"name": "build", "handler": t_build, "wants_request_id": True,
+     "_meta": {"ui": {"resourceUri": VIEW_URI}, "ui/resourceUri": VIEW_URI},
      "description": "Run the project's model.py in a fresh FreeCAD document, save build/<name>.FCStd and "
                     "return the build report (validity, mass, every feature's errors, holes, sketch status, "
                     "checks.json results, Δ against the previous build) plus a render. Read the whole report "
@@ -2854,6 +2888,18 @@ TOOLS = [
                                      "(build/viewer/<name>.html) in the user's browser instead; it follows every "
                                      "build."},
                           "launch": {"type": "boolean", "description": "Default true; false only installs the helper."}})},
+    {"name": "viewer_data", "handler": t_viewer_data, "_meta": {"ui": {"visibility": ["app"]}},
+     "description": "Not for Claude: the 3D view that a chat app shows inline with each build result calls this "
+                    "to load the project's last build. Returns JSON: the build's status, checks and part list, "
+                    "or (with model) one chunk of the model as base64 glTF. For the user to see the model, "
+                    "build; to open the view in their browser, open_in_gui(viewer=true).",
+     "inputSchema": _obj({"project": _PROJECT,
+                          "have": {"type": "string", "description": "The scene version the view shows; the reply "
+                                   "is only {version} when that is still the last build."},
+                          "model": {"type": "string", "description": "A scene's model version: return a chunk of "
+                                    "that model instead of the status."},
+                          "offset": {"type": "integer", "description": "Byte offset of the chunk. Default 0."}},
+                         ["project"])},
 ]
 TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
 
@@ -2870,7 +2916,26 @@ def server_instructions():
 
 
 def tool_descriptors():
-    return [{k: v for k, v in t.items() if k not in ("handler", "wants_request_id")} for t in TOOLS]
+    """The tools as tools/list shows them. With the live view off (FREECAD_MCP_VIEWER=0), nothing of
+    the inline view is left: no viewer_data tool, no ui:// resource on build."""
+    out = []
+    for t in TOOLS:
+        d = {k: v for k, v in t.items() if k not in ("handler", "wants_request_id")}
+        if "ui" in d.get("_meta", {}) and not vw.enabled():
+            if "resourceUri" not in d["_meta"]["ui"]:
+                continue
+            del d["_meta"]
+        out.append(d)
+    return out
+
+
+def view_resources():
+    """resources/list: the inline 3D view's page, the only resource."""
+    if not vw.enabled():
+        return []
+    return [{"uri": VIEW_URI, "name": "viewer", "title": "FreeCAD live 3D view", "mimeType": VIEW_MIME,
+             "description": "The project's last build in 3D: rotate, section, hide parts, measure. Shown inline "
+                            "with every build's result.", "_meta": VIEW_META}]
 
 
 _JSON_TYPES = {"string": str, "boolean": bool, "object": dict, "array": list}
@@ -3002,9 +3067,12 @@ def handle(msg):
     params = msg.get("params") or {}
     if method == "initialize":
         want = params.get("protocolVersion")
+        caps = params.get("capabilities")
+        ext = caps.get("extensions") if isinstance(caps, dict) else None
+        _client["ui"] = bool(isinstance(ext, dict) and ext.get(UI_EXTENSION) is not None)
         return {"jsonrpc": "2.0", "id": mid, "result": {
             "protocolVersion": want if want in SUPPORTED_PROTOCOLS else DEFAULT_PROTOCOL,
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": {"tools": {"listChanged": False}, "resources": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
             "instructions": server_instructions()}}
     if method == "notifications/cancelled":
@@ -3021,6 +3089,16 @@ def handle(msg):
     if method == "tools/call":
         return {"jsonrpc": "2.0", "id": mid,
                 "result": call_tool(params.get("name"), params.get("arguments"), request_id=mid)}
+    if method == "resources/list":
+        return {"jsonrpc": "2.0", "id": mid, "result": {"resources": view_resources()}}
+    if method == "resources/templates/list":
+        return {"jsonrpc": "2.0", "id": mid, "result": {"resourceTemplates": []}}
+    if method == "resources/read":
+        if params.get("uri") != VIEW_URI or not vw.enabled():
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32002, "message": "Resource not found",
+                                                           "data": {"uri": params.get("uri")}}}
+        return {"jsonrpc": "2.0", "id": mid, "result": {"contents": [
+            {"uri": VIEW_URI, "mimeType": VIEW_MIME, "text": vw.app_page(), "_meta": VIEW_META}]}}
     if mid is None:
         return None
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found: %s" % method}}

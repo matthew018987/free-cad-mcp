@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The viewer page's code. server/viewer.py bundles it with three.js into the page each build writes
-// (build/viewer/<name>.html), together with that build's status and model.
+// (build/viewer/<name>.html), together with that build's status and model, and into the server's MCP App
+// (the same page with no build in it), which a chat app shows inline with every build's result.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -8,6 +9,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 1000;
+const APP_POLL_MS = 3000;          // inline in a chat: how often a view on screen asks for a newer build
+const APP_HEIGHT = 520;            // …and the height it asks the chat for (px)
 
 // ------------------------------------------------------------------ renderer, cameras, lights
 const canvas = $('c');
@@ -523,8 +526,141 @@ function readInline(id) {
   return e ? e.textContent : '';
 }
 
+// ------------------------------------------------------------------ inline in a chat (MCP App)
+// The server's ui:// resource is this page with no build in it. A chat app that supports MCP Apps puts it in
+// a frame with each build call and relays JSON-RPC over postMessage. The frame learns the project from the
+// call's arguments, asks the server's viewer_data tool for the scene and then the model (in chunks), and
+// asks again every few seconds while it is on screen, so it follows later builds and keeps its camera.
+let stopped = false;
+function startApp() {
+  const host = window.parent;
+  const waiting = new Map();
+  let nextId = 1, project = null, done = false, mode = 'inline', fetched = null;
+  const send = (m) => host.postMessage({ jsonrpc: '2.0', ...m }, '*');
+  const notify = (method, params) => send({ method, params: params || {} });
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = nextId++;
+    waiting.set(id, { resolve, reject });
+    send({ id, method, params });
+  });
+
+  async function ask(args) {
+    const r = await request('tools/call', { name: 'viewer_data', arguments: { project, ...args } });
+    const text = ((r && r.content) || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
+    if (!r || r.isError) throw new Error(text || 'the server did not answer');
+    return JSON.parse(text);
+  }
+
+  async function fetchModel(info) {
+    const chunks = [];
+    for (let offset = 0, total = 1; offset < total;) {
+      const r = await ask({ model: info.model, offset });
+      if (r.stale || !r.data) return;                  // a newer build replaced it: the next round asks again
+      chunks.push(r.data);
+      offset = r.next; total = r.total;
+    }
+    fetched = info.model;
+    queueModel({ version: info.model, rev: info.glb_rev, parts: info.parts || [] }, chunks.join(''));
+  }
+
+  async function load() {
+    const r = await ask({ have: status ? status.version : '' });
+    if (r.scene) showStatus(r.scene);
+    else if (!r.version) { $('msg').textContent = done ? 'This project has no build to show yet.' : 'Building…'; return; }
+    if (status.model && status.model !== modelVersion && status.model !== fetched) await fetchModel(status);
+  }
+
+  // one round at a time; a round asked for while one runs follows it straight away
+  let timer = null, running = false, again = false, fails = 0, seen = true;
+  async function round() {
+    if (running) { again = true; return; }
+    running = true;
+    clearTimeout(timer);
+    if (project && seen && !document.hidden) {
+      try {
+        await load();
+        fails = 0;
+        setLive(true, 'live', 'Follows every build of ' + project);
+      } catch (e) {
+        fails++;
+        setLive(false, 'not updating', e.message);
+        if (!status) $('msg').textContent = 'Could not load the build: ' + e.message;
+      }
+    }
+    running = false;
+    if (stopped || (fails >= 5 && !again)) return;      // after five failures, wait for the next build or scroll
+    timer = setTimeout(round, again ? 0 : APP_POLL_MS);
+    again = false;
+  }
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver((es) => { seen = es[es.length - 1].isIntersecting; if (seen) round(); }).observe(canvas);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) round(); });
+
+  function context(c) {
+    if (c.theme === 'light' || c.theme === 'dark') { document.documentElement.dataset.theme = c.theme; applyTheme(); }
+    if (c.displayMode) mode = c.displayMode;
+    if (c.availableDisplayModes) $('full').hidden = !c.availableDisplayModes.includes('fullscreen');
+    $('full').textContent = mode === 'fullscreen' ? 'Exit full screen' : 'Full screen';
+    const d = c.containerDimensions;
+    if (d && mode === 'inline' && d.height == null) {
+      notify('ui/notifications/size-changed', { height: Math.min(APP_HEIGHT, d.maxHeight || APP_HEIGHT) });
+    }
+  }
+  $('full').onclick = () => {
+    request('ui/request-display-mode', { mode: mode === 'fullscreen' ? 'inline' : 'fullscreen' })
+      .then((r) => context({ displayMode: r && r.mode })).catch(() => {});
+  };
+
+  addEventListener('message', (e) => {
+    const m = e.data;
+    if (e.source !== host || !m || m.jsonrpc !== '2.0') return;
+    if (m.method === undefined) {                       // the reply to a request of ours
+      const w = waiting.get(m.id);
+      if (!w) return;
+      waiting.delete(m.id);
+      if (m.error) w.reject(new Error(m.error.message || 'request failed')); else w.resolve(m.result);
+      return;
+    }
+    const p = m.params || {};
+    if (m.method === 'ui/notifications/tool-input') {
+      project = (p.arguments || {}).project || project;
+      if (!status) $('msg').textContent = 'Building…';
+      round();
+    } else if (m.method === 'ui/notifications/tool-result' || m.method === 'ui/notifications/tool-cancelled') {
+      done = true;
+      round();
+    } else if (m.method === 'ui/notifications/host-context-changed') {
+      context(p);
+    } else if (m.method === 'ui/resource-teardown') {
+      stopped = true;
+      clearTimeout(timer);
+      renderer.dispose();
+      renderer.forceContextLoss();                      // a chat can hold many views; give the GPU context back
+      send({ id: m.id, result: {} });
+    } else if (m.id !== undefined) {
+      send(m.method === 'ping' ? { id: m.id, result: {} }
+        : { id: m.id, error: { code: -32601, message: 'Method not found: ' + m.method } });
+    }
+  });
+
+  document.body.classList.add('app');
+  if (matchMedia('(max-width: 720px)').matches) $('side').classList.add('collapsed');
+  $('msg').textContent = 'Connecting…';
+  setLive(false, 'connecting', 'Waiting for the chat app');
+  request('ui/initialize', { appInfo: { name: 'freecad-live-view', version: '1' },
+                             appCapabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
+                             protocolVersion: '2026-01-26' })
+    .then((r) => {
+      notify('ui/notifications/initialized');
+      context({ containerDimensions: {}, ...((r && r.hostContext) || {}) });
+    })
+    .catch((e) => { $('msg').textContent = 'The chat app did not connect this view: ' + e.message; });
+}
+
 // ------------------------------------------------------------------ render loop (only when something changed)
 function frame() {
+  if (stopped) return;
   requestAnimationFrame(frame);
   if (controls.update()) dirty = true;
   if (!dirty) return;
@@ -537,8 +673,11 @@ function frame() {
 }
 resize();
 frame();
-const first = JSON.parse(readInline('fcmcp-scene') || 'null');
-if (first) showStatus(first); else $('msg').textContent = 'This page carries no build.';
-queueModel(JSON.parse(readInline('fcmcp-model') || 'null'), readInline('fcmcp-glb'));
-setLive(false, 'connecting', 'Looking for scene.js next to this page');
-poll();
+if (readInline('fcmcp-app') === 'true') startApp();
+else {
+  const first = JSON.parse(readInline('fcmcp-scene') || 'null');
+  if (first) showStatus(first); else $('msg').textContent = 'This page carries no build.';
+  queueModel(JSON.parse(readInline('fcmcp-model') || 'null'), readInline('fcmcp-glb'));
+  setLive(false, 'connecting', 'Looking for scene.js next to this page');
+  poll();
+}

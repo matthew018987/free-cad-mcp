@@ -1,7 +1,8 @@
 <!doctype html>
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Template: server/viewer.py fills in the build's data and one script (three.js r160, MIT, + viewer.js)
-     and writes the result to build/viewer/<name>.html after every build. -->
+     and writes the result to build/viewer/<name>.html after every build. Without a build in it, the same
+     page is the MCP App a chat app shows inline with each build result. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -35,7 +36,7 @@
   #app { display: flex; height: 100%; }
   #side { width: 300px; flex: none; background: var(--panel); border-right: 1px solid var(--line);
     overflow-y: auto; display: flex; flex-direction: column; }
-  #stage { position: relative; flex: 1; min-width: 0; }
+  #stage { position: relative; flex: 1; min-width: 0; min-height: 0; }
   #c { display: block; width: 100%; height: 100%; touch-action: none; }
   header { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
   .titlerow { display: flex; align-items: center; gap: 8px; }
@@ -79,8 +80,12 @@
     font-variant-numeric: tabular-nums; pointer-events: none; }
   #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted);
     font-size: 14px; pointer-events: none; text-align: center; padding: 20px; }
-  #hint { position: absolute; right: 12px; bottom: 10px; color: var(--muted); font-size: 11px; pointer-events: none; }
-  #toggleSide { position: absolute; right: 12px; top: 12px; display: none; }
+  #hint { position: absolute; left: 108px; right: 12px; bottom: 10px; color: var(--muted); font-size: 11px;
+    pointer-events: none; text-align: right; }
+  #tools { position: absolute; right: 12px; top: 12px; display: flex; gap: 6px; }
+  #toggleSide { display: none; }
+  body.app #toggleSide { display: block; }
+  body.app #side.collapsed { display: none; }
   [hidden] { display: none !important; }
   @media (max-width: 720px) {
     #app { flex-direction: column-reverse; }
@@ -151,7 +156,10 @@
     <div id="info" hidden></div>
     <div id="msg">Loading…</div>
     <div id="hint">Drag to rotate · right-drag to pan · scroll to zoom · click a part to pick a point, shift-click a second to measure</div>
-    <button class="btn" id="toggleSide">Panel</button>
+    <div id="tools">
+      <button class="btn" id="full" hidden>Full screen</button>
+      <button class="btn" id="toggleSide">Panel</button>
+    </div>
   </main>
 </div>
 <!--fcmcp:data-->

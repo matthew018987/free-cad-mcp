@@ -16,6 +16,10 @@ the model changed, so a tab kept open follows every build and keeps its camera.
 Where those files can't be read (a preview, an emailed copy) the page shows the
 build it was written with. Nothing listens on a port.
 
+The same page, without a build in it, is the server's MCP App (app_page()): a
+chat app shows it inline with every build's result, and it asks the server for
+the project's scene.json and scene.glb (read_scene(), glb_chunk()).
+
 Browsers refuse ES module files from a local file, so bundle() turns three.js's
 modules and viewer/viewer.js into one classic script: each module becomes a
 function returning its exports, imports become lookups."""
@@ -37,7 +41,11 @@ MODULES = [                                              # in dependency order
     ("three/addons/loaders/GLTFLoader.js", "vendor/three/examples/jsm/loaders/GLTFLoader.js"),
     ("viewer", "viewer.js"),
 ]
+SUBDIR = os.path.join("build", "viewer")                 # in the project
+SCENE_JSON, GLB = "scene.json", "scene.glb"
 SCENE_JS, MODEL_JS = "scene.js", "model.js"
+CHUNK = 3 * 128 * 1024                   # bytes of GLB per reply to the inline view; a multiple of 3, so the
+                                         # base64 of consecutive chunks joins into the base64 of the file
 _SPECS = {s for s, _ in MODULES}
 REG = "__fcmcpModules"                   # the bundle's module table (no module uses this name)
 
@@ -117,12 +125,17 @@ def _json(data):
     return json.dumps(data, ensure_ascii=True, default=str).replace("<", "\\u003c")
 
 
-def page(scene, model=None, glb=None):
+def page(scene, model=None, glb=None, app=False):
     """The viewer HTML for one build: scene = the build's status (scene.json), model = {version,
-    rev, parts} of the GLB bytes `glb`, or None when there is no model to show."""
+    rev, parts} of the GLB bytes `glb`, or None when there is no model to show. app=True marks
+    the page as the MCP App, which gets its builds from the server through the chat app."""
     with open(TEMPLATE) as fh:
         html = fh.read()
-    data = ['<script type="application/json" id="fcmcp-scene">%s</script>' % _json(scene)]
+    data = []
+    if scene is not None:
+        data.append('<script type="application/json" id="fcmcp-scene">%s</script>' % _json(scene))
+    if app:
+        data.append('<script type="application/json" id="fcmcp-app">true</script>')
     if model and glb:
         data.append('<script type="application/json" id="fcmcp-model">%s</script>' % _json(model))
         data.append('<script type="text/plain" id="fcmcp-glb">%s</script>' % base64.b64encode(glb).decode("ascii"))
@@ -164,5 +177,36 @@ def write(out, scene, glb_path=None, model_changed=True):
 
 def find_page(pdir):
     """The newest viewer page a build wrote in the project, or None."""
-    pages = glob.glob(os.path.join(glob.escape(pdir), "build", "viewer", "*.html"))
+    pages = glob.glob(os.path.join(glob.escape(pdir), SUBDIR, "*.html"))
     return max(pages, key=os.path.getmtime) if pages else None
+
+
+# ------------------------------------------------------------ the view inline in a chat (MCP App)
+
+_app_page = None
+
+
+def app_page():
+    """The viewer page with no build in it: the HTML of the server's ui:// resource."""
+    global _app_page
+    if _app_page is None:
+        _app_page = page(None, app=True)
+    return _app_page
+
+
+def read_scene(pdir):
+    """The project's scene.json (the last main build's status and part list), or None."""
+    try:
+        with open(os.path.join(pdir, SUBDIR, SCENE_JSON), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def glb_chunk(pdir, offset):
+    """(up to CHUNK bytes of the project's scene.glb from `offset`, the file's size)."""
+    path = os.path.join(pdir, SUBDIR, GLB)
+    with open(path, "rb") as fh:
+        fh.seek(offset)
+        return fh.read(CHUNK), os.path.getsize(path)

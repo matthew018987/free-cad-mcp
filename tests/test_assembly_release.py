@@ -38,7 +38,7 @@ try:
     c = Client(tmp)
     c.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
     tools = sorted(t["name"] for t in c.rpc("tools/list")["result"]["tools"])
-    check("22 tools", len(tools) == 22, ", ".join(tools))
+    check("23 tools", len(tools) == 23, ", ".join(tools))
 
     print("assemblies (Assembly workbench)")
     err, txt, _ = c.tool("build", {"project": "asmlab", "views": []})

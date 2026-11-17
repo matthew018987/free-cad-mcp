@@ -103,6 +103,7 @@ the design playbook (the `guide` tool serves the same text).
 | `release` | Build, checks, manufacturability, exports, drawings, BOM and notes → zip; refuses to ship a failing design |
 | `job_status` | Collect background work |
 | `open_in_gui` | Open a file in the FreeCAD GUI; `install_reload_helper` (with your OK) installs MCP Reload; `viewer: true` opens the project's live 3D view in your browser instead |
+| `viewer_data` | Not for Claude: the 3D view shown in the chat loads the last build through it |
 
 Inside `model.py`, `fc` (`server/fclib.py`) provides parameters bound to a
 spreadsheet, fully constrained sketch profiles, standard holes, reference
@@ -113,11 +114,19 @@ and `checks.json`, in global coordinates.
 
 ## Live 3D viewer
 
-Every build writes `build/viewer/<name>.html`: one file holding the viewer
-and the model, so it also opens in Cowork's file preview or as an email
-attachment. `open_in_gui(viewer=true)` opens it in your browser (the first
-build's reply names it). Keep it open for the whole design: after every build
-it reloads the model and keeps your camera where you left it.
+In Cowork and the Claude desktop app, the viewer appears in the chat with
+every build's result: there is nothing to open or look for. It is an
+[MCP App](https://modelcontextprotocol.io/docs/extensions/apps), so any chat
+app that supports those shows it. A view that is on screen also follows later
+builds and keeps your camera, *Full screen* enlarges it, and *Panel* shows or
+hides the side panel.
+
+Every build also writes the same viewer to `build/viewer/<name>.html`: one
+file holding the viewer and the model, so it opens in Cowork's file preview
+or as an email attachment too. `open_in_gui(viewer=true)` opens it in your
+browser (the first build's reply names it). Keep it open for the whole
+design: after every build it reloads the model and keeps your camera where
+you left it.
 
 - Rotate (drag), pan (right-drag), zoom (scroll), view presets matching the
   server's renders (Front looks toward +Y), orthographic or perspective.
@@ -135,6 +144,14 @@ once a second, so it follows the builds while it stays in the project's
 with (marked *snapshot*). The same folder holds `scene.glb` (FreeCAD's own
 glTF export, one node per part) and `scene.json`. three.js is bundled, so the
 page works offline.
+
+The view in the chat is that page with no build in it, served as the
+resource `ui://freecad/viewer.html`, which the `build` tool names. The chat
+app frames it and relays its requests: it asks the `viewer_data` tool for the
+project's `scene.json` and then `scene.glb`, and asks again every 3 seconds
+while it is on screen. A background build (`wait: false`) shows the view with
+the previous build until the new one is written. Variant builds don't change
+it.
 
 ## Live view in FreeCAD
 
@@ -162,7 +179,7 @@ package and change the version in that header.
 | `FREECAD_PYTHON` | Interpreter `launch.sh` starts the server with (default: FreeCAD's bundled Python) |
 | `FREECAD_MCP_HOME` | Projects directory (default `~/CAD`) |
 | `FREECAD_MCP_ROOTS` | `:`-separated allow-list of directories the server may touch |
-| `FREECAD_MCP_VIEWER` | `0` turns the live 3D viewer page and its scene export off |
+| `FREECAD_MCP_VIEWER` | `0` turns the live 3D viewer (the page, the view in the chat and the scene export) off |
 
 ## Layout
 

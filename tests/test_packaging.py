@@ -171,7 +171,7 @@ try:
     check("launch.sh starts the server; instructions come from the plugin",
           "release" in init["result"].get("instructions", ""), init["result"].get("instructions", "")[:200])
     tools = c.rpc("tools/list")["result"]["tools"]
-    check("22 tools", len(tools) == 22, len(tools))
+    check("23 tools", len(tools) == 23, len(tools))
     err, txt, _ = c.tool("freecad_status")
     st = json.loads(txt)
     check("status: host diagnostics, FreeCAD found, playbook inside the plugin",
