@@ -1384,6 +1384,9 @@ def _finish_modes(res, r1, r2, kind, modes, case):
         if case.get("loads") or case.get("gravity"):
             res["notes"].append("loads are not used by a frequency analysis (natural frequencies depend on the "
                                 "supports, stiffness and mass only)")
+        res["notes"].append("these are upper bounds: only the part's own mass is in the analysis and its supports "
+                            "are rigid. What it carries (a motor, a load) and real fixings both lower the "
+                            "frequencies")
         if len(f) > 1 and f[0] > 0.5 and abs(f[1] - f[0]) < 0.005 * f[0]:
             res["notes"].append("modes 1 and 2 are a pair at the same frequency: the part is equally stiff in two "
                                 "directions, so either shape (or a mix) can occur")

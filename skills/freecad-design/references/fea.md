@@ -69,7 +69,12 @@ analyze(project="bracket", case="motor_load",
   `material={…, "density": g/cm³}`). Reports the first frequencies and how
   mode 1 moves; notes an equal pair (a symmetric section) and 0 Hz rigid-body
   modes (the part is not held). Keep the first frequency well above any
-  forcing frequency (motor speed, step rate, vibration source).
+  forcing frequency (motor speed, step rate, vibration source). The
+  frequencies are **upper bounds**: only the part's own mass is in the
+  analysis and its supports are rigid. A part that carries something (a
+  motor on its mount, a load on a shelf) vibrates far lower than computed,
+  and carried mass cannot be given yet: do not clear a motor speed for a
+  loaded part on this result alone.
 - **Buckling** — `analysis="buckling"`, `modes` (default 3): the load factor
   at which the given loads buckle the part ("buckles at 35.4 × the load").
   Negative factors mean the reversed load would buckle it. Linear buckling is

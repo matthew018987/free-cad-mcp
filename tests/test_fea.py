@@ -343,6 +343,8 @@ def main():
           4.5 * f[0] < f[2] < 6.3 * f[0] and any(abs(x - 12630) / 12630 < 0.02 for x in f), f)
     check("…converged on a finer mesh, mode shapes plotted", "finer mesh changes f1" in txt and "✓" in txt
           and any(x["type"] == "image" for x in content), txt)
+    check("…and called upper bounds: the mass the part carries and its real fixings are not in the analysis",
+          "these are upper bounds: only the part's own mass" in txt and "lower the frequencies" in txt, txt)
     err, txt, _ = c.tool("analyze", {"project": "beam", "case": "modes2", "analysis": "frequency", "modes": 2,
                                      "fixed": ["Beam.face(-X)"],
                                      "loads": [{"ref": "Beam.face(+X)", "force": 100, "direction": "-Z"}],
