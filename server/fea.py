@@ -3,20 +3,24 @@
 buckling of one part, or of several parts bonded together.
 
 Supports, loads and bonded faces are faces or holes chosen with the usual
-geometry references. gmsh meshes the parts (second-order tetrahedra) and labels
-every mesh face and element with the solid face and solid it lies on, so the
-sets are exact — also on two coincident faces of different parts. This module
-writes the CalculiX input itself (each part its own material, bonded face pairs
-tied with *TIE), runs ccx on all cores and reads its results with numpy.
+geometry references. gmsh meshes the parts (second-order tetrahedra, the same
+mesh on every run) and labels every mesh face and element with the solid face
+and solid it lies on, so the sets are exact — also on two coincident faces of
+different parts. This module writes the CalculiX input itself (each part its
+own material, bonded face pairs tied with *TIE, a bearing load as the pressure
+of a pin on the side of the hole it presses against), runs ccx on all cores
+and reads its results with numpy.
 
-The result is evidence, not a picture. static: the largest von Mises stress and
-where (also away from the supports, where rigid fixtures inflate it), the
-largest displacement and where, the safety factor against yield (per part), the
-support reactions against the applied load (equilibrium). frequency: the first
-natural frequencies and the mode shapes (loads are not used). buckling: the
-factors by which the loads must grow to buckle the part, and the mode shape.
-A re-run on a finer mesh shows the numbers have converged when the first mesh
-is small enough to afford it.
+The result is evidence, not a picture. static: the stress each part is judged
+on and where (von Mises, or for a brittle material the largest principal
+stress; also away from the supports, where rigid fixtures inflate it), the
+principal stresses, the largest displacement and where, the safety factor (per
+part), the support reactions against the loads (equilibrium). frequency: the
+first natural frequencies and the mode shapes (loads are not used). buckling:
+the factors by which the loads must grow to buckle the part, and the mode
+shape. A second mesh, finer or for a large first mesh coarser, shows whether
+the numbers have converged. Every result names the method version and the
+programs that produced it, and is stale once those change.
 
 Limits: linear elastic, small displacements, isotropic material, rigid
 supports; bonded faces are glued (no contact, sliding or bolt preload)."""
@@ -1199,7 +1203,7 @@ def _axis_words(d):
 
 def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadline=None):
     """Solve a case → (result dict, png path or None). parts: the part objects; mats: {label:
-    material}. A second mesh shows whether the result has converged — refine None: a finer one
+    material}. A second mesh shows whether the result has converged. refine None: a finer one
     while the first is small enough (AUTO_REFINE nodes; the finer one is then the result), else a
     coarser one; True: the finer one; False: no second mesh. deadline: time.time() by which
     CalculiX must be done."""
