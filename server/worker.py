@@ -2136,16 +2136,19 @@ def fea_checks(pdir, project, checks, doc):
                     detail += " — the factor changed %.1f %% on a finer mesh (see the analyze notes)" % (
                         100 * (r.get("change") or {}).get("factor", 0))
             else:
-                per = r.get("per_part") or [dict(part=r.get("part"), max_vm=r["max_vm"], max_disp=r["max_disp"],
-                                                 max_vm_away=r.get("max_vm_away"))]
+                per = r.get("per_part") or [dict(part=r.get("part"), max_stress=r["max_stress"],
+                                                 max_disp=r["max_disp"], max_stress_away=r.get("max_stress_away"),
+                                                 criterion=r.get("criterion"))]
                 if c.get("part"):
                     per = [p for p in per if p["part"] == c["part"]]
                     if not per:
                         raise ValueError("part %r is not in case '%s' (%s)" % (c["part"], name, ", ".join(labels)))
-                away = bool(c.get("away_from_supports")) and all(p.get("max_vm_away") is not None for p in per)
+                away = bool(c.get("away_from_supports")) and all(p.get("max_stress_away") is not None for p in per)
                 where = " away from the supports" if away else ""
                 for p in per:
-                    p["_vm"] = (p["max_vm_away"] if away else p["max_vm"]) or 0.0
+                    # the stress the part is judged on: von Mises, or the largest principal stress if brittle
+                    p["_vm"] = (p["max_stress_away"] if away else p["max_stress"]) or 0.0
+                    p["_what"] = "max principal stress" if p.get("criterion") == "principal" else "max von Mises"
                     p["_y"] = mats[p["part"]]["yield"]
                     p["_sf"] = p["_y"] / p["_vm"] if p["_vm"] > 1e-12 else float("inf")
                 def inpart(p):
@@ -2153,12 +2156,13 @@ def fea_checks(pdir, project, checks, doc):
                 if t == "fea_safety":
                     g = min(per, key=lambda p: p["_sf"])
                     ok, val = g["_sf"] >= lim - 1e-9, "%s (≥ %s)" % (fmt(g["_sf"], 2), fmt(lim, 2))
-                    detail = "max von Mises%s %s MPa vs yield %s MPa (%s)%s, case '%s'" % (
-                        where, fmt(g["_vm"], 3), fmt(g["_y"], 0), mats[g["part"]]["name"], inpart(g), name)
+                    detail = "%s%s %s MPa vs %s %s MPa (%s)%s, case '%s'" % (
+                        g["_what"], where, fmt(g["_vm"], 3), "the breaking stress" if g.get("criterion") == "principal"
+                        else "yield", fmt(g["_y"], 0), mats[g["part"]]["name"], inpart(g), name)
                 elif t == "fea_stress":
                     g = max(per, key=lambda p: p["_vm"])
                     ok, val = g["_vm"] <= lim + 1e-9, "%s MPa (≤ %s)" % (fmt(g["_vm"], 3), fmt(lim, 3))
-                    detail = "max von Mises%s%s, case '%s'" % (where, inpart(g), name)
+                    detail = "%s%s%s, case '%s'" % (g["_what"], where, inpart(g), name)
                 else:
                     g = max(per, key=lambda p: p["max_disp"] or 0.0)
                     d = g["max_disp"] or 0.0
@@ -2168,9 +2172,10 @@ def fea_checks(pdir, project, checks, doc):
                 if t == "fea_displacement":
                     conv, delta, what = r.get("converged_disp", r.get("converged")), ch.get("disp"), "displacement"
                 elif away:
-                    conv, delta, what = r.get("converged_stress_away"), ch.get("vm_away"), "stress away from the supports"
+                    conv, delta, what = (r.get("converged_stress_away"), ch.get("stress_away"),
+                                         "stress away from the supports")
                 else:
-                    conv, delta, what = r.get("converged_stress", r.get("converged")), ch.get("vm"), "peak stress"
+                    conv, delta, what = r.get("converged_stress", r.get("converged")), ch.get("stress"), "peak stress"
                 if conv is False:
                     detail += (" — the %s changed %.0f %% on a finer mesh (a singularity at a sharp corner or a rigid "
                                "support edge, or a mesh too coarse: see the analyze notes)" % (what, 100 * (delta or 0)))

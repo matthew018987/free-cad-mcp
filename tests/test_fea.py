@@ -187,6 +187,11 @@ def main():
           isinstance(res.get("method"), int) and (res.get("versions") or {}).get("calculix") and re.search(
               r"solver    CalculiX [\d.]+, gmsh [\d.]+, FreeCAD [\d.]+ \(analysis method %s\)" % res.get("method"),
               txt), (res.get("method"), res.get("versions"), txt))
+    check("principal stresses: the largest tension is on top of the cantilever and the largest compression below, equal in size",
+          res["max_principal_at"][2] > 9 and res["min_principal_at"][2] < 1
+          and abs(res["max_principal"] + res["min_principal"]) < 0.15 * res["max_principal"]
+          and re.search(r"principal largest tension [\d.]+ MPa at \(.*\) · largest compression -[\d.]+ MPa", txt)
+          and res.get("criterion") == "von Mises" and res["max_stress"] == res["max_vm"], (res, txt))
     single = res["max_disp"]
     fj = json.load(open(os.path.join(pdir, "fea.json")))
     check("case saved in fea.json", fj["cases"]["tip"]["fixed"] == ["Beam.face(-X)"], fj)
@@ -219,6 +224,28 @@ def main():
     check("the zone is measured to the support face itself: every point of a grid within 5 mm of a slanted face, and "
           "no other (the face's bounding box would take all %s)" % z.get("points"),
           not err and z.get("wrong") == 0 and z.get("near") == 2835 and z.get("points") == 9261, txt)
+
+    print("a brittle material is judged on its principal stresses")
+    light = dict(tip, case="brittle", loads=[{"ref": "Beam.face(+X)", "force": 10, "direction": "-Z"}])
+    err, txt, _ = c.tool("analyze", dict(light, material="resin"))
+    br = result(pdir, "brittle") if not err else {}
+    big = max(abs(br.get("max_principal", 0)), abs(br.get("min_principal", 0)))
+    check("resin is brittle: judged on its largest principal stress against the breaking stress, and says so",
+          not err and br.get("criterion") == "principal" and abs(br["max_stress"] - big) < 1e-9
+          and abs(br["safety_factor"] - 50 / big) < 1e-6 and "resin: E 2500 MPa, ν 0.380, brittle, breaking stress "
+          "50 MPa" in txt and re.search(r"stress    max principal stress [\d.]+ MPa at .* against the breaking "
+                                        r"stress 50 MPa", txt) and "not on von Mises" in txt, txt)
+    check("…5.6 MPa away from the support, as the bending stress there (M·c/I at x = 6.67)",
+          abs((br.get("max_stress_away") or 0) - 5.6) < 0.15, br.get("max_stress_away"))
+    err, txt, _ = c.tool("analyze", dict(light, material={"E": 2500, "nu": 0.38, "yield": 50}))
+    check("the same values without the flag → von Mises against yield", not err
+          and result(pdir, "brittle").get("criterion") == "von Mises" and "against yield 50 MPa" in txt, txt)
+    err, txt, _ = c.tool("analyze", dict(light, material={"E": 2500, "nu": 0.38, "yield": 50, "brittle": True}))
+    check("material={…, \"brittle\": true} → the principal stress", not err
+          and result(pdir, "brittle").get("criterion") == "principal" and "max principal stress" in txt, txt)
+    err, txt, _ = c.tool("lookup_standard", {"material": "acrylic"})
+    check("lookup_standard(material) says which materials are brittle", not err and "brittle: analyze judges it on "
+          "its largest principal stress" in txt, txt)
 
     print("uniform pressure 0.1 MPa on the top face (w = 1 N/mm)")
     err, txt, _ = c.tool("analyze", {"project": "beam", "case": "press", "fixed": ["Beam.face(-X)"],

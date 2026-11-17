@@ -2283,8 +2283,9 @@ def t_release(args, request_id=None):
                 got = "lowest buckling factor %s" % (_g(ad.get("buckling_factor")) if ad.get("buckling_factor")
                                                      else "> %s" % _g(ad.get("buckling_factor_above")))
             else:
-                got = "max von Mises %s MPa, safety factor %s, max displacement %s mm" % (
-                    _g(ad.get("max_vm")), _g(ad.get("safety_factor")), _g(ad.get("max_disp")))
+                got = "max %s %s MPa, safety factor %s, max displacement %s mm" % (
+                    "principal stress" if ad.get("criterion") == "principal" else "von Mises",
+                    _g(ad.get("max_stress")), _g(ad.get("safety_factor")), _g(ad.get("max_disp")))
             fea_lines.append("  FEA      case '%s' re-solved for this model (%.0f s): %s" % (
                 case, ad.get("time") or a.get("elapsed") or 0, got))
         b = run_worker("build", {"project_dir": pdir, "params": {}, "views": [], "force": False}, timeout=600,

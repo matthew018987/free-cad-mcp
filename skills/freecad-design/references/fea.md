@@ -28,7 +28,9 @@ analyze(project="bracket", case="motor_load",
   `lookup_standard(material="PETG")`), or
   `material="6061-T6"` / `{"E": 2100, "nu": 0.38, "yield": 50}` (MPa).
   Part-level overrides: `parts.<Part>.youngs_modulus_mpa`, `poisson`,
-  `yield_mpa`.
+  `yield_mpa`. A **brittle** material (resin, acrylic and PMMA in the table;
+  `"brittle": true` in the material or `parts.<Part>.brittle` for another)
+  breaks without yielding: its `yield` is its breaking stress.
 - **Mesh**: a size from the part (at least two elements through its thinnest
   wall, coarsened for large parts); `mesh_size` overrides. The refined solve
   (size/1.5, to show convergence) runs by default only when the first mesh
@@ -72,6 +74,14 @@ analyze(project="bracket", case="motor_load",
   than a set distance, which the reply states: the part's thinnest wall (at
   most 2/3 of its thinnest dimension), the same on every mesh. Set it with
   `support_margin` (mm) in the case when the part needs another.
+- **brittle parts** are judged on their largest principal stress, not on
+  von Mises: by size, in tension or compression, against the breaking stress
+  (on the safe side in compression, where brittle materials are stronger).
+  Von Mises understates the stress that breaks them wherever tension acts in
+  more than one direction: a notch root, a held face. The reply and the
+  checks name the criterion each part was judged on.
+- **principal**: the largest tension and the largest compression, and where.
+  Tension across a print's layers is the direction it is weakest in.
 - **converge**: how much a finer mesh changes each result — displacement
   (should change < 3 %), the peak stress and the stress away from the
   supports, each marked ✓/✗ (frequency: f1 < 2 %; buckling: the factor

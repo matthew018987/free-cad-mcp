@@ -47,6 +47,7 @@ CCX_TIMEOUT = 1800       # s per CalculiX run
 ANALYSES = ("static", "frequency", "buckling")
 DEFAULT_MODES = {"frequency": 6, "buckling": 3}
 TITLES = {"static": "linear static", "frequency": "natural frequencies", "buckling": "linear buckling"}
+MAT_KEYS = ("name", "E", "nu", "yield", "density", "brittle", "source", "note")     # of a material, kept in a result
 C3D10_FACES = ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0))   # CalculiX tet faces S1..S4 (corner indices)
 SMESH_TO_CCX = (1, 0, 2, 3, 4, 6, 5, 8, 7, 9)              # FreeCAD tet10 node order → CalculiX C3D10
 
@@ -119,6 +120,8 @@ def case_hash(case, mats):
 
     def one(m):
         v = [round(float(m["E"]), 6), round(float(m["nu"]), 6), round(float(m["yield"]), 6)]
+        if m.get("brittle"):
+            v.append("brittle")
         return v + [round(float(m.get("density") or 0.0), 6)] if dens else v
     single = not isinstance(mats.get("E", {}), dict)
     keep["material"] = one(mats) if single else {k: one(v) for k, v in sorted(mats.items())}
@@ -830,6 +833,16 @@ def _von_mises(s):
     return np.sqrt(0.5 * ((xx - yy) ** 2 + (yy - zz) ** 2 + (zz - xx) ** 2) + 3.0 * (xy ** 2 + yz ** 2 + zx ** 2))
 
 
+def _principal(s):
+    """(largest, smallest) principal stress at each node, from the six stress components."""
+    import numpy as np
+    t = np.empty((len(s), 3, 3))
+    for (i, j), c in (((0, 0), 0), ((1, 1), 1), ((2, 2), 2), ((0, 1), 3), ((1, 2), 4), ((0, 2), 5)):
+        t[:, i, j] = t[:, j, i] = s[:, c]
+    w = np.linalg.eigvalsh(t)                       # ascending
+    return w[:, 2], w[:, 0]
+
+
 def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
     import numpy as np
     t0 = time.time()
@@ -881,7 +894,9 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
         disp = [b for b in blocks if b[0] == "DISP"][-1]
         s["U"] = field(disp[2], disp[3][:, :3], 3)
         stress = [b for b in blocks if b[0] == "STRESS"]
-        s["vm"] = _von_mises(field(stress[-1][2], stress[-1][3][:, :6], 6)) if stress else np.zeros(mesh.nodes)
+        sig = field(stress[-1][2], stress[-1][3][:, :6], 6) if stress else np.zeros((mesh.nodes, 6))
+        s["vm"] = _von_mises(sig)
+        s["p1"], s["p3"] = _principal(sig)
         s["reaction"] = _reactions(dat)
     else:
         shapes = [field(b[2], b[3][:, :3], 3) for b in blocks if b[0] == "DISP"]
@@ -907,35 +922,51 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
 # ------------------------------------------------------------------ summaries
 
 def _summary(s, model, mats, margin):
-    """Static: largest stress (also away from the supports), displacement, safety factor — overall
-    and per part."""
+    """Static: the stress each part is judged on, overall and away from the supports; the largest
+    tension and compression; displacement; safety factor — overall and per part. A ductile part
+    is judged on its von Mises stress (yielding). A brittle one breaks on its largest principal
+    stress, so it is judged on that by size: tension, or compression against the same strength,
+    which is on the safe side."""
     import numpy as np
-    xyz, vm = s["xyz"], s["vm"]
+    xyz, vm, p1, p3 = s["xyz"], s["vm"], s["p1"], s["p3"]
     dl = np.linalg.norm(s["U"], axis=1)
     near = _within(xyz, s["fixed_points"], margin)       # by distance to the fixed faces themselves
+    brittle = np.array([bool(m.get("brittle")) for m in mats])
+    judged = np.where(brittle[np.maximum(s["npart"], 0)], np.maximum(np.abs(p1), np.abs(p3)), vm)
+    s["judged"] = judged
 
-    def peak(mask, vals):
+    def peak(mask, vals, low=False):
         if not mask.any():
             return None, None
-        i = int(np.flatnonzero(mask)[np.argmax(vals[mask])])
+        idx = np.flatnonzero(mask)
+        i = int(idx[np.argmin(vals[mask]) if low else np.argmax(vals[mask])])
         return float(vals[i]), [float(c) for c in xyz[i]]
     per = []
     for k, lb in enumerate(model.labels):
         mk = s["npart"] == k
-        v, at = peak(mk, vm)
-        va, aat = peak(mk & ~near, vm)
+        v, at = peak(mk, judged)
+        va, aat = peak(mk & ~near, judged)
         d, dat = peak(mk, dl)
         y = float(mats[k]["yield"])
-        per.append({"part": lb, "max_vm": v, "max_vm_at": at, "max_vm_away": va, "max_vm_away_at": aat,
+        per.append({"part": lb, "criterion": "principal" if brittle[k] else "von Mises",
+                    "max_stress": v, "max_stress_at": at, "max_stress_away": va, "max_stress_away_at": aat,
+                    "max_vm": peak(mk, vm)[0], "max_vm_away": peak(mk & ~near, vm)[0],
                     "max_disp": d, "max_disp_at": dat, "yield": y,
                     "safety_factor": (y / v) if v and v > 1e-12 else None,
                     "safety_factor_away": (y / va) if va and va > 1e-12 else None})
     allm = np.ones(len(vm), dtype=bool)
-    v, at = peak(allm, vm)
-    va, aat = peak(~near, vm)
+    v, at = peak(allm, judged)
+    va, aat = peak(~near, judged)
+    w, wat = peak(allm, vm)
+    wa, waat = peak(~near, vm)
+    t, tat = peak(allm, p1)
+    c, cat = peak(allm, p3, low=True)
     i = int(np.argmax(dl))
     sfs = [p["safety_factor"] for p in per if p["safety_factor"] is not None]
-    out = {"max_vm": v, "max_vm_at": at, "max_vm_away": va, "max_vm_away_at": aat,
+    out = {"criterion": "principal" if brittle.all() else "von Mises" if not brittle.any() else "per part",
+           "max_stress": v, "max_stress_at": at, "max_stress_away": va, "max_stress_away_at": aat,
+           "max_vm": w, "max_vm_at": wat, "max_vm_away": wa, "max_vm_away_at": waat,
+           "max_principal": t, "max_principal_at": tat, "min_principal": c, "min_principal_at": cat,
            "max_disp": float(dl[i]), "max_disp_at": [float(c) for c in xyz[i]],
            "max_disp_vec": [float(c) for c in s["U"][i]],
            "safety_factor": min(sfs) if sfs else None,
@@ -1028,8 +1059,7 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
             notes.append("refined solve stopped: it did not finish in the time left — the result is from the first "
                          "mesh (%s nodes); pass a longer timeout to see convergence" % _int(s1["nodes"]))
     res = dict(final)
-    res.update(analysis=kind, material={k: mlist[0].get(k) for k in ("name", "E", "nu", "yield", "density", "source",
-                                                                       "note")},
+    res.update(analysis=kind, material={k: mlist[0].get(k) for k in MAT_KEYS},
                fixed=s1["fixed"], loads=s1["loads"], applied=list(s1["applied"]), coarse=r1 if r2 else None,
                notes=notes, ccx_seconds=round(s1["ccx_seconds"] + (s_final["ccx_seconds"] if r2 else 0.0), 2),
                threads=threads(), method=METHOD, versions=versions())
@@ -1039,8 +1069,7 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
         res["part"] = model.labels[0]
     else:
         res["parts"] = model.labels
-        res["materials"] = {lb: {k: m.get(k) for k in ("name", "E", "nu", "yield", "density", "source", "note")}
-                            for lb, m in zip(model.labels, mlist)}
+        res["materials"] = {lb: {k: m.get(k) for k in MAT_KEYS} for lb, m in zip(model.labels, mlist)}
     if s_final["ties"]:
         res["bonded"] = [{"a": a, "b": b, "follower": sl, "leader": ml, "tied_nodes": n - u, "untied_nodes": u}
                          for a, b, sl, ml, n, u in s_final["ties"]]
@@ -1086,13 +1115,13 @@ def _finish_static(res, s_final, r1, r2, mlist, model):
         gov = min(res["per_part"], key=lambda p: p["safety_factor"] if p["safety_factor"] is not None else 1e99)
         res["governing_part"] = gov["part"]
         k = model.labels.index(gov["part"])
-        res["material"] = {kk: mlist[k].get(kk) for kk in ("name", "E", "nu", "yield", "density", "source", "note")}
+        res["material"] = {kk: mlist[k].get(kk) for kk in MAT_KEYS}
     if r2:
         dd = abs(r2["max_disp"] - r1["max_disp"]) / max(r2["max_disp"], 1e-12)
-        ds = abs(r2["max_vm"] - r1["max_vm"]) / max(r2["max_vm"], 1e-12)
-        da = (abs(r2["max_vm_away"] - r1["max_vm_away"]) / max(r2["max_vm_away"], 1e-12)
-              if r1.get("max_vm_away") and r2.get("max_vm_away") else None)
-        res["change"] = {"disp": dd, "vm": ds, "vm_away": da}
+        ds = abs(r2["max_stress"] - r1["max_stress"]) / max(r2["max_stress"], 1e-12)
+        da = (abs(r2["max_stress_away"] - r1["max_stress_away"]) / max(r2["max_stress_away"], 1e-12)
+              if r1.get("max_stress_away") and r2.get("max_stress_away") else None)
+        res["change"] = {"disp": dd, "stress": ds, "stress_away": da}
         # per quantity: a displacement can converge while a peak stress at a singularity never does
         res["converged_disp"] = dd < 0.03
         res["converged_stress"] = ds < 0.10
@@ -1102,9 +1131,9 @@ def _finish_static(res, s_final, r1, r2, mlist, model):
             res["notes"].append("the peak stress still changes %.0f %% with a finer mesh — a stress singularity "
                                 "(sharp internal corner, edge of a rigid support or a point-like load): judge the "
                                 "stress away from it, or add a fillet" % (100 * ds))
-    if res.get("max_vm_away") and res["max_vm"] > 1.3 * res["max_vm_away"]:
+    if res.get("max_stress_away") and res["max_stress"] > 1.3 * res["max_stress_away"]:
         res["notes"].append("the peak is at a support: a rigid fixture inflates the stress at its edge; away from "
-                            "the supports the peak is %s MPa" % an.fmt(res["max_vm_away"], 3))
+                            "the supports the peak is %s MPa" % an.fmt(res["max_stress_away"], 3))
 
 
 def _finish_modes(res, r1, r2, kind, modes, case):
@@ -1155,8 +1184,9 @@ def report_lines(res, case_name):
         who, case_name, TITLES[kind], res.get("rev", ""), res.get("time", 0))]
     mats = res.get("materials") or {who: res["material"]}
     for lb, m in mats.items():
-        lines.append("material  %s%s: E %.0f MPa, ν %s, yield %.0f MPa%s (%s)" % (
-            "%s " % lb if len(mats) > 1 else "", m["name"], m["E"], f(m["nu"], 3), m["yield"],
+        lines.append("material  %s%s: E %.0f MPa, ν %s, %s %.0f MPa%s (%s)" % (
+            "%s " % lb if len(mats) > 1 else "", m["name"], m["E"], f(m["nu"], 3),
+            "brittle, breaking stress" if m.get("brittle") else "yield", m["yield"],
             ", density %s g/cm³" % f(m["density"], 2) if kind == "frequency" and m.get("density") else "",
             m["source"]))
     for b in res.get("bonded") or []:
@@ -1204,9 +1234,18 @@ def report_lines(res, case_name):
     return lines
 
 
+def _judged(criterion):
+    return "max principal stress" if criterion == "principal" else "max von Mises"
+
+
+def _strength(criterion):
+    return "the breaking stress" if criterion == "principal" else "yield"
+
+
 def _report_static(lines, res):
     f = an.fmt
     m = res["material"]
+    margin = f(res.get("support_margin", 0), 2)
     if res.get("reaction") is not None:
         ok = res.get("balance_error") is not None and res["balance_error"] < 0.01
         lines.append("reaction  supports carry (%s) N vs applied (%s) N  %s" % (
@@ -1218,30 +1257,40 @@ def _report_static(lines, res):
     per = res.get("per_part")
     sf = res.get("safety_factor")
     if per:
-        top = max(per, key=lambda p: p["max_vm"] or 0)
-        lines.append("stress    max von Mises %s MPa at (%s) in %s" % (
-            f(res["max_vm"], 3), an._pt(Vector(*res["max_vm_at"]), 2), top["part"]))
+        top = max(per, key=lambda p: p["max_stress"] or 0)
+        lines.append("stress    %s %s MPa at (%s) in %s" % (
+            _judged(top["criterion"]), f(res["max_stress"], 3), an._pt(Vector(*res["max_stress_at"]), 2), top["part"]))
         for p in per:
-            lines.append("part      %s: max von Mises %s MPa → safety factor %s against yield %.0f MPa%s · max "
-                         "displacement %s mm" % (
-                             p["part"], f(p["max_vm"], 3), f(p["safety_factor"], 2), p["yield"],
-                             " (away from the supports %s MPa → %s)" % (f(p["max_vm_away"], 3),
-                                                                        f(p["safety_factor_away"], 2))
-                             if p.get("max_vm_away") is not None and abs(p["max_vm_away"] - p["max_vm"]) > 1e-9
-                             else "", f(p["max_disp"], 4)))
+            lines.append("part      %s: %s %s MPa → safety factor %s against %s %.0f MPa%s · max displacement %s mm" % (
+                p["part"], _judged(p["criterion"]), f(p["max_stress"], 3), f(p["safety_factor"], 2),
+                _strength(p["criterion"]), p["yield"],
+                " (away from the supports %s MPa → %s)" % (f(p["max_stress_away"], 3), f(p["safety_factor_away"], 2))
+                if p.get("max_stress_away") is not None and abs(p["max_stress_away"] - p["max_stress"]) > 1e-9
+                else "", f(p["max_disp"], 4)))
         lines.append("          → governing: %s, safety factor %s%s" % (
-            res.get("governing_part"), f(sf, 2), "  (away from the supports: over %s mm from a support)"
-            % f(res.get("support_margin", 0), 2) if any(p.get("max_vm_away") is not None for p in per) else ""))
+            res.get("governing_part"), f(sf, 2), "  (away from the supports: over %s mm from a support)" % margin
+            if any(p.get("max_stress_away") is not None for p in per) else ""))
     else:
-        lines.append("stress    max von Mises %s MPa at (%s)%s" % (
-            f(res["max_vm"], 3), an._pt(Vector(*res["max_vm_at"]), 2),
-            "  → safety factor %s against yield %.0f MPa" % (f(sf, 2), m["yield"]) if sf else ""))
-        if res.get("max_vm_away") is not None and abs(res["max_vm_away"] - res["max_vm"]) > 1e-9:
+        crit = res.get("criterion")
+        lines.append("stress    %s %s MPa at (%s)%s" % (
+            _judged(crit), f(res["max_stress"], 3), an._pt(Vector(*res["max_stress_at"]), 2),
+            "  → safety factor %s against %s %.0f MPa" % (f(sf, 2), _strength(crit), m["yield"]) if sf else ""))
+        if res.get("max_stress_away") is not None and abs(res["max_stress_away"] - res["max_stress"]) > 1e-9:
             lines.append("          away from the supports: %s MPa at (%s)  → safety factor %s  (over %s mm from a "
                          "support)" % (
-                             f(res["max_vm_away"], 3), an._pt(Vector(*res["max_vm_away_at"]), 2),
-                             f(m["yield"] / res["max_vm_away"], 2) if res["max_vm_away"] > 1e-12 else "∞",
-                             f(res.get("support_margin", 0), 2)))
+                             f(res["max_stress_away"], 3), an._pt(Vector(*res["max_stress_away_at"]), 2),
+                             f(m["yield"] / res["max_stress_away"], 2) if res["max_stress_away"] > 1e-12 else "∞",
+                             margin))
+    if res.get("criterion") != "von Mises":
+        lines.append("          a brittle material breaks on its largest principal stress, so it is judged on that "
+                     "(by size: tension or compression), not on von Mises (%s MPa)" % f(res["max_vm"], 3))
+    t, c = res.get("max_principal"), res.get("min_principal")
+    if t is not None and c is not None:
+        lines.append("principal %s · %s" % (
+            "largest tension %s MPa at (%s)" % (f(t, 3), an._pt(Vector(*res["max_principal_at"]), 2))
+            if t > 1e-9 else "no tension",
+            "largest compression %s MPa at (%s)" % (f(c, 3), an._pt(Vector(*res["min_principal_at"]), 2))
+            if c < -1e-9 else "no compression"))
     lines.append("deflect   max displacement %s mm at (%s), direction (%s)" % (
         f(res["max_disp"], 4), an._pt(Vector(*res["max_disp_at"]), 2), an._pt(Vector(*res["max_disp_vec"]), 4)))
     if res.get("change"):
@@ -1250,9 +1299,10 @@ def _report_static(lines, res):
         def mark(x):
             return "✓" if x else "✗"
         lines.append("converge  finer mesh changes displacement %.1f %% %s · peak stress %.1f %% %s%s%s" % (
-            100 * ch["disp"], mark(res.get("converged_disp")), 100 * ch["vm"], mark(res.get("converged_stress")),
-            " · stress away from supports %.1f %% %s" % (100 * ch["vm_away"], mark(res.get("converged_stress_away")))
-            if ch.get("vm_away") is not None else "",
+            100 * ch["disp"], mark(res.get("converged_disp")), 100 * ch["stress"], mark(res.get("converged_stress")),
+            " · stress away from supports %.1f %% %s" % (100 * ch["stress_away"],
+                                                         mark(res.get("converged_stress_away")))
+            if ch.get("stress_away") is not None else "",
             "  → converged ✓" if res.get("converged") else "  (see notes)"))
 
 
@@ -1312,7 +1362,9 @@ def plot(s, res, png):
     fig = plt.figure(figsize=(12, 5.4), dpi=110)
     cmap = plt.get_cmap("turbo")
     for k, (title, vals, unit, pts, at, peak, nd) in enumerate((
-            ("von Mises stress", s["vm"], "MPa", xyz, res["max_vm_at"], res["max_vm"], 3),
+            ({"von Mises": "von Mises stress", "principal": "largest principal stress"}.get(
+                res.get("criterion"), "judged stress"), s["judged"], "MPa", xyz, res["max_stress_at"],
+             res["max_stress"], 3),
             ("displacement (×%.3g)" % scale, dl, "mm", xyz + scale * U, res["max_disp_at"], res["max_disp"], 4))):
         ax = fig.add_subplot(1, 2, k + 1)
         vmax = float(vals.max()) or 1.0

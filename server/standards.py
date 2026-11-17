@@ -426,6 +426,11 @@ MATERIAL_MECH = {
 }
 
 
+# Materials that break without yielding first. analyze judges them on their largest principal stress
+# against the breaking stress (the "yield" above), not on von Mises.
+BRITTLE = ("resin", "acrylic", "pmma")
+
+
 def material_mech(name):
     """((E MPa, ν, yield MPa, note), matched key) for a material name, or (None, None)."""
     n = str(name or "").lower()
@@ -448,6 +453,9 @@ def material_report(name):
     if vals:
         out.append("  E %d MPa · ν %.2f · yield %d MPa%s" % (vals[0], vals[1], vals[2],
                                                           ("  — " + vals[3]) if vals[3] else ""))
+        if key in BRITTLE:
+            out.append("  brittle: analyze judges it on its largest principal stress against that breaking stress, "
+                       "not on von Mises")
     if dens:
         out.append("  density %g g/cm³" % dens)
     out.append("  typical values (rule) — prefer the supplier's datasheet; override per part in project.json: "
@@ -456,10 +464,10 @@ def material_report(name):
 
 
 def mech_info(project, label, override=None):
-    """Mechanical properties for one part: {E, nu, yield, density, name, source, note}.
-    Order: an explicit override {name | E, nu, yield} → parts.<label>.{youngs_modulus_mpa,
-    poisson, yield_mpa} → the part's material (or the project material) in MATERIAL_MECH.
-    Raises ValueError naming what to set when nothing is known."""
+    """Mechanical properties for one part: {E, nu, yield, density, brittle, name, source, note}.
+    Order: an explicit override {name | E, nu, yield, brittle} → parts.<label>.{youngs_modulus_mpa,
+    poisson, yield_mpa, brittle} → the part's material (or the project material) in MATERIAL_MECH
+    and BRITTLE. Raises ValueError naming what to set when nothing is known."""
     project = project or {}
     pcfg = (project.get("parts") or {}).get(label) or {}
     name = pcfg.get("material") or (project.get("material") or {}).get("name") or ""
@@ -480,8 +488,11 @@ def mech_info(project, label, override=None):
     src = ("'%s' in the material table" % key) if vals and not given else (
         "given" if not vals else "'%s' in the material table, with given values" % key)
     dens, _ = density_info(project, label)
-    return {"E": E, "nu": nu, "yield": yld, "density": dens, "name": name or "(given)", "source": src,
-            "note": vals[3] if vals else ""}
+    brittle = ov.get("brittle") if ov.get("brittle") is not None else pcfg.get("brittle")
+    if brittle is None:
+        brittle = bool(vals) and key in BRITTLE
+    return {"E": E, "nu": nu, "yield": yld, "density": dens, "brittle": bool(brittle), "name": name or "(given)",
+            "source": src, "note": vals[3] if vals else ""}
 
 
 def density_for(project, label):
