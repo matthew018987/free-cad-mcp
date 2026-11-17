@@ -420,6 +420,7 @@ def _resolve(model, case, mats, kind, size):
         fixed_parts.add(k)
         fixed_labels.append("%s (%d face%s)" % (label, len(faces), "" if len(faces) == 1 else "s"))
     applied, load_lines, loads = Vector(), [], []
+    scale = 0.0                          # the size of the loads (N): what a balance error is measured against
     if kind != "frequency":
         for k, ld in enumerate(case.get("loads") or []):
             if not isinstance(ld, dict) or "ref" not in ld:
@@ -445,11 +446,13 @@ def _resolve(model, case, mats, kind, size):
                     d = _direction(ld["direction"])
                 loads.append({"faces": faces, "force": (d.x * mag, d.y * mag, d.z * mag)})
                 applied += d * mag
+                scale += mag
                 load_lines.append("force %s N along (%s) on %s" % (an.fmt(mag, 3), an._pt(d, 3), label))
             elif "pressure" in ld:
                 p = float(ld["pressure"])
                 loads.append({"faces": faces, "pressure": p})
                 applied += _area_normal(model, faces) * (-p)
+                scale += abs(p) * sum(model.compound.Faces[j].Area for j in faces)
                 load_lines.append("pressure %s MPa on %s (pushing on the face)" % (an.fmt(p, 4), label))
             else:
                 raise FeaError("load %d on %s needs force (N) or pressure (MPa)" % (k + 1, label))
@@ -457,6 +460,7 @@ def _resolve(model, case, mats, kind, size):
     if grav:
         w = sum(s.Volume * float(mats[k]["density"]) * 1e-6 * 9.81 for k, s in enumerate(model.shapes))
         applied += Vector(0, 0, -w)
+        scale += w
         load_lines.append("self weight %s N (-Z)" % an.fmt(w, 3))
     bonds, links = [], []
     for pair in case.get("bonded") or []:
@@ -492,7 +496,7 @@ def _resolve(model, case, mats, kind, size):
         raise FeaError("%s %s neither supported nor bonded to a supported part — add fixed=[…] on it or a bonded "
                        "pair that joins it to one" % (", ".join(free), "is" if len(free) == 1 else "are"))
     return {"fixed_faces": fixed_faces, "fixed_labels": fixed_labels, "loads": loads, "gravity": grav,
-            "bonds": bonds, "applied": applied, "load_lines": load_lines}
+            "bonds": bonds, "applied": applied, "load_scale": scale, "load_lines": load_lines}
 
 
 def _sets(model, mesh, plan):
@@ -772,7 +776,8 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
                 else "see the CalculiX output below")
         raise FeaError("CalculiX produced no result: %s\n%s" % (hint, "\n".join(errors[:6]) or log.strip()[-600:]))
     s = {"size": size, "nodes": mesh.nodes, "elements": mesh.elements, "xyz": mesh.xyz, "surface": mesh.surface,
-         "npart": mesh.npart, "applied": plan["applied"], "fixed": plan["fixed_labels"], "loads": plan["load_lines"],
+         "npart": mesh.npart, "applied": plan["applied"], "load_scale": plan["load_scale"],
+         "fixed": plan["fixed_labels"], "loads": plan["load_lines"],
          "fixed_boxes": [model.compound.Faces[j].BoundBox for j in plan["fixed_faces"]],
          "ccx_seconds": round(t_ccx, 2), "mesh_seconds": round(t_mesh, 2),
          "warnings": [ln.strip() for ln in out_lines if "*WARNING" in ln and "gentiedmpc" not in ln]}
@@ -986,10 +991,13 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
 
 def _finish_static(res, s_final, r1, r2, mlist, model):
     applied, reaction = s_final["applied"], s_final["reaction"]
+    # measured against the size of the loads, not their resultant: loads that balance each other
+    # (pressure inside a bore, two opposing forces) have no resultant to compare with
+    scale = max(s_final["load_scale"], applied.Length)
     bal = None
-    if reaction is not None and applied.Length > 1e-9:
-        bal = (Vector(*reaction) + applied).Length / applied.Length
-    res.update(reaction=reaction, balance_error=bal)
+    if reaction is not None and scale > 1e-9:
+        bal = (Vector(*reaction) + applied).Length / scale
+    res.update(reaction=reaction, balance_error=bal, load_scale=scale)
     if len(model.parts) > 1:
         gov = min(res["per_part"], key=lambda p: p["safety_factor"] if p["safety_factor"] is not None else 1e99)
         res["governing_part"] = gov["part"]
@@ -1119,7 +1127,9 @@ def _report_static(lines, res):
         ok = res.get("balance_error") is not None and res["balance_error"] < 0.01
         lines.append("reaction  supports carry (%s) N vs applied (%s) N  %s" % (
             an._pt(Vector(*res["reaction"]), 2), an._pt(Vector(*res["applied"]), 2),
-            "✓ in equilibrium" if ok else "✗ out of balance by %.1f %% — check the loads and supports"
+            "✓ in equilibrium%s" % (" (the loads balance each other)" if sum(
+                c * c for c in res["applied"]) ** 0.5 < 0.01 * (res.get("load_scale") or 0) else "")
+            if ok else "✗ out of balance by %.1f %% — check the loads and supports"
             % (100 * (res.get("balance_error") or 0))))
     per = res.get("per_part")
     sf = res.get("safety_factor")
