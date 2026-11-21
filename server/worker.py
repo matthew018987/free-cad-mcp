@@ -2105,12 +2105,12 @@ def fea_checks(pdir, project, checks, doc):
             if not r or not mats:
                 val, detail = "no result", "run analyze(case='%s')" % name
                 stale.append(name)
+            elif fea.outdated(r):       # before the hash: a new method may hash the same case differently
+                val, detail = "stale", "%s: run analyze(case='%s') (release re-runs it)" % (fea.outdated(r), name)
+                stale.append(name)
             elif r.get("case_hash") != fea.result_hash(case, mats) or not current:
                 val, detail = "stale", ("the model or case changed since %s — run analyze(case='%s') "
                                         "(release re-runs it)" % (r.get("rev", "?"), name))
-                stale.append(name)
-            elif fea.outdated(r):
-                val, detail = "stale", "%s: run analyze(case='%s') (release re-runs it)" % (fea.outdated(r), name)
                 stale.append(name)
             elif kind == "frequency":
                 f1 = (r.get("frequencies_hz") or [0.0])[0]

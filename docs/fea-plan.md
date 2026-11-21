@@ -1,6 +1,6 @@
 # FEA: fixes, gaps and new features (plan)
 
-Status: **phase 1 built** · 2026-11-17 · decisions in §6 · branch `feature/fea-fixes`, from `main` at `50e95a4` · tested on Linux with FreeCAD 1.1.3 (cloud session); the run on the Mac with 1.1.4 is still to do
+Status: **phase 1 built** · 2026-11-17 · decisions in §6 · branch `feature/fea-fixes`, from `main` at `50e95a4` · tested on Linux with FreeCAD 1.1.3 (cloud session) and on the Mac with FreeCAD 1.1.4, CalculiX 2.23 and gmsh 4.15.0 (benchmarks within 1 % of Linux)
 
 **Goal.** An `analyze` result is evidence a release can rest on. Three phases,
 in this order: fix what gives or allows a misleading answer today, fill the

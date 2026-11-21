@@ -566,6 +566,13 @@ def main():
     err, txt, _ = c.tool("build", {"project": "beam", "views": []})
     check("…and so is one solved by another CalculiX", re.search(r"✗ strength\s+fea_safety\s+stale", txt)
           and "solved with CalculiX 0.1" in txt, txt)
+    # as main wrote it: no stamp, and a case hash method 2 no longer gives (a brittle material gained its flag)
+    json.dump(dict({k: v for k, v in old.items() if k not in ("method", "versions")}, case_hash="0" * 40),
+              open(rp, "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("…and an unstamped result names the method, not a model or case change the user never made",
+          re.search(r"✗ strength\s+fea_safety\s+stale\s+it comes from analysis method 1, now %d" % old["method"], txt)
+          and "the model or case changed" not in txt, txt)
     open(rp, "w").write(kept)
     p = params(length=100, w=10, h=12)
     json.dump(p, open(os.path.join(pdir, "params.json"), "w"))
