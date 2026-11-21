@@ -2068,10 +2068,11 @@ FEA_KIND = {"fea_frequency": "frequency", "fea_buckling": "buckling"}       # th
 
 def fea_checks(pdir, project, checks, doc):
     """Checks on analysis results (out/fea/<case>/result.json). A result counts only
-    if it was solved for this geometry (geom_sig of each part in this build) and this
-    case and material (case_hash); otherwise the check fails as stale and names the
-    case to re-run. Static checks on a multi-part case judge every part (each against
-    its own yield) unless the check names one with part."""
+    if it was solved for this geometry (geom_sig of each part in this build), this
+    case and material (case_hash), and by this analysis method, CalculiX and gmsh
+    (fea.outdated); otherwise the check fails as stale and names the case to re-run.
+    Static checks on a multi-part case judge every part (each against its own yield)
+    unless the check names one with part."""
     lines, res, stale = [], [], []
     cases = (load_json(os.path.join(pdir, "fea.json"), {}) or {}).get("cases") or {}
     for c in checks:
@@ -2104,6 +2105,9 @@ def fea_checks(pdir, project, checks, doc):
             if not r or not mats:
                 val, detail = "no result", "run analyze(case='%s')" % name
                 stale.append(name)
+            elif fea.outdated(r):       # before the hash: a new method may hash the same case differently
+                val, detail = "stale", "%s: run analyze(case='%s') (release re-runs it)" % (fea.outdated(r), name)
+                stale.append(name)
             elif r.get("case_hash") != fea.result_hash(case, mats) or not current:
                 val, detail = "stale", ("the model or case changed since %s — run analyze(case='%s') "
                                         "(release re-runs it)" % (r.get("rev", "?"), name))
@@ -2113,9 +2117,8 @@ def fea_checks(pdir, project, checks, doc):
                 ok, val = f1 >= lim - 1e-9, "%s Hz (≥ %s)" % (fmt(f1, 1), fmt(lim, 1))
                 detail = "first natural frequency, case '%s'%s" % (
                     name, " — mode 1 is a rigid-body mode: the supports leave the part free" if f1 < 0.5 else "")
-                if r.get("converged_freq") is False:
-                    detail += " — f1 changed %.1f %% on a finer mesh (see the analyze notes)" % (
-                        100 * (r.get("change") or {}).get("f1", 0))
+                ok, val, detail = _settled(c, ok, val, detail, r.get("converged_freq"), "first frequency",
+                                           (r.get("change") or {}).get("f1"))
             elif kind == "buckling":
                 lam = r.get("buckling_factor")
                 if lam is None:
@@ -2128,20 +2131,22 @@ def fea_checks(pdir, project, checks, doc):
                     ap = math.sqrt(sum(x * x for x in r.get("applied") or [0, 0, 0]))
                     ok, val = lam >= lim - 1e-9, "%s (≥ %s)" % (fmt(lam, 2), fmt(lim, 2))
                     detail = "lowest positive buckling factor — buckles at %s N, case '%s'" % (fmt(lam * ap, 1), name)
-                if r.get("converged_buckling") is False:
-                    detail += " — the factor changed %.1f %% on a finer mesh (see the analyze notes)" % (
-                        100 * (r.get("change") or {}).get("factor", 0))
+                ok, val, detail = _settled(c, ok, val, detail, r.get("converged_buckling"), "buckling factor",
+                                           (r.get("change") or {}).get("factor"))
             else:
-                per = r.get("per_part") or [dict(part=r.get("part"), max_vm=r["max_vm"], max_disp=r["max_disp"],
-                                                 max_vm_away=r.get("max_vm_away"))]
+                per = r.get("per_part") or [dict(part=r.get("part"), max_stress=r["max_stress"],
+                                                 max_disp=r["max_disp"], max_stress_away=r.get("max_stress_away"),
+                                                 criterion=r.get("criterion"))]
                 if c.get("part"):
                     per = [p for p in per if p["part"] == c["part"]]
                     if not per:
                         raise ValueError("part %r is not in case '%s' (%s)" % (c["part"], name, ", ".join(labels)))
-                away = bool(c.get("away_from_supports")) and all(p.get("max_vm_away") is not None for p in per)
+                away = bool(c.get("away_from_supports")) and all(p.get("max_stress_away") is not None for p in per)
                 where = " away from the supports" if away else ""
                 for p in per:
-                    p["_vm"] = (p["max_vm_away"] if away else p["max_vm"]) or 0.0
+                    # the stress the part is judged on: von Mises, or the largest principal stress if brittle
+                    p["_vm"] = (p["max_stress_away"] if away else p["max_stress"]) or 0.0
+                    p["_what"] = "max principal stress" if p.get("criterion") == "principal" else "max von Mises"
                     p["_y"] = mats[p["part"]]["yield"]
                     p["_sf"] = p["_y"] / p["_vm"] if p["_vm"] > 1e-12 else float("inf")
                 def inpart(p):
@@ -2149,12 +2154,13 @@ def fea_checks(pdir, project, checks, doc):
                 if t == "fea_safety":
                     g = min(per, key=lambda p: p["_sf"])
                     ok, val = g["_sf"] >= lim - 1e-9, "%s (≥ %s)" % (fmt(g["_sf"], 2), fmt(lim, 2))
-                    detail = "max von Mises%s %s MPa vs yield %s MPa (%s)%s, case '%s'" % (
-                        where, fmt(g["_vm"], 3), fmt(g["_y"], 0), mats[g["part"]]["name"], inpart(g), name)
+                    detail = "%s%s %s MPa vs %s %s MPa (%s)%s, case '%s'" % (
+                        g["_what"], where, fmt(g["_vm"], 3), "the breaking stress" if g.get("criterion") == "principal"
+                        else "yield", fmt(g["_y"], 0), mats[g["part"]]["name"], inpart(g), name)
                 elif t == "fea_stress":
                     g = max(per, key=lambda p: p["_vm"])
                     ok, val = g["_vm"] <= lim + 1e-9, "%s MPa (≤ %s)" % (fmt(g["_vm"], 3), fmt(lim, 3))
-                    detail = "max von Mises%s%s, case '%s'" % (where, inpart(g), name)
+                    detail = "%s%s%s, case '%s'" % (g["_what"], where, inpart(g), name)
                 else:
                     g = max(per, key=lambda p: p["max_disp"] or 0.0)
                     d = g["max_disp"] or 0.0
@@ -2164,17 +2170,42 @@ def fea_checks(pdir, project, checks, doc):
                 if t == "fea_displacement":
                     conv, delta, what = r.get("converged_disp", r.get("converged")), ch.get("disp"), "displacement"
                 elif away:
-                    conv, delta, what = r.get("converged_stress_away"), ch.get("vm_away"), "stress away from the supports"
+                    conv, delta, what = (r.get("converged_stress_away"), ch.get("stress_away"),
+                                         "stress away from the supports")
                 else:
-                    conv, delta, what = r.get("converged_stress", r.get("converged")), ch.get("vm"), "peak stress"
-                if conv is False:
-                    detail += (" — the %s changed %.0f %% on a finer mesh (a singularity at a sharp corner or a rigid "
-                               "support edge, or a mesh too coarse: see the analyze notes)" % (what, 100 * (delta or 0)))
+                    conv, delta, what = r.get("converged_stress", r.get("converged")), ch.get("stress"), "peak stress"
+                ok, val, detail = _settled(c, ok, val, detail, conv, what, delta)
+                if t == "fea_displacement" and r.get("beyond_yield"):
+                    ok, val = False, val + ", beyond yield"
+                    detail += ("; the stress in this case is above the material's strength, so the real deflection "
+                               "is larger than this linear result")
+                if r.get("large_deflection"):
+                    detail += "; a large deflection, for which a linear analysis is approximate"
         except (ValueError, TypeError, KeyError, fea.FeaError) as e:
             detail = str(e)
         res.append({"id": cid, "type": t, "ok": ok, "value": val, "detail": detail})
         lines.append("  %s %-18s %-11s %s%s" % ("✓" if ok else "✗", cid, t, val, ("   " + detail) if detail else ""))
     return lines, res, sorted(set(stale))
+
+
+def _settled(c, ok, val, detail, conv, what, delta):
+    """(ok, value, detail) of a fea_* check once convergence counts: a quantity that changed too much between the
+    two meshes (conv False), or that was solved on one mesh only (conv None), is not evidence. The check fails,
+    unless it accepts that with "accept_unconverged": true, and says so either way."""
+    if conv is True:
+        return ok, val, detail
+    if conv is False:
+        why = "the %s changed %s %% between the two meshes" % (what, fmt(100 * (delta or 0), 1))
+        how = ("That is a singularity (a sharp corner, the edge of a rigid support) or too coarse a mesh: judge it "
+               "away_from_supports, add a fillet or pass a smaller mesh_size" if what == "peak stress"
+               else "Pass a smaller mesh_size")
+    else:
+        why = "the case was solved on one mesh only, so convergence is not shown"
+        how = "Re-run it without refine=false"
+    if c.get("accept_unconverged"):
+        return ok, val + ", not converged (accepted)", "%s; %s, accepted by accept_unconverged" % (detail, why)
+    return False, val + ", not converged", "%s; %s. %s, or set \"accept_unconverged\": true on the check" % (
+        detail, why, how)
 
 
 def _geom_sig_of(doc, label):
@@ -2202,7 +2233,7 @@ def op_analyze(args):
         case.pop("parts", None)
         case.pop("bonded", None)
     for k in ("part", "parts", "bonded", "analysis", "modes", "fixed", "loads", "gravity", "material", "mesh_size",
-              "refine"):
+              "refine", "support_margin"):
         if args.get(k) is not None:
             case[k] = args[k]
     known = ", ".join(sorted(cases)) or "none yet"

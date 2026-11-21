@@ -812,8 +812,9 @@ def check(ws, c, chk, state):
             want = chk.get("load_dir")
             along = (sum(a * b for a, b in zip(ap, want)) / load) if want and load > 1e-9 else 1.0
             sf, disp = r.get("safety_factor") or 0.0, r.get("max_disp", 1e9)
-            if True in cases.get(str(r.get("case")), ()) and r.get("max_vm_away"):
-                sf = float((r.get("material") or {}).get("yield", 0)) / r["max_vm_away"]   # the check's own basis
+            away = r.get("max_stress_away") or r.get("max_vm_away")
+            if True in cases.get(str(r.get("case")), ()) and away:
+                sf = float((r.get("material") or {}).get("yield", 0)) / away   # the check's own basis
             fixed = " ".join(r.get("fixed") or [])
             good = (sf >= chk.get("min_safety", 0) - 1e-9 and disp <= chk.get("max_disp", 1e9) + 1e-9
                     and load >= chk.get("min_load", 0) - 1e-6 and along >= 0.99

@@ -10,7 +10,7 @@ the current model.
 ```
 analyze(project="bracket", case="motor_load",
         fixed=["Bracket.holes(d=5.5)"],                       # what is held
-        loads=[{"ref": "Bracket.holes(d=22.4)", "force": 25, "direction": "-Z"},
+        loads=[{"ref": "Bracket.holes(d=22.4)", "bearing": 25, "direction": "-Z"},
                {"ref": "Bracket.face(+X)", "pressure": 0.05}],  # MPa, pushes on the face
         gravity=False, material=None, mesh_size=None, refine=True)
 ```
@@ -19,21 +19,42 @@ analyze(project="bracket", case="motor_load",
   supports are stiffer than real bolts and clamps, so results are slightly
   optimistic on deflection and pessimistic on stress right at the support.
 - **Loads**: `force` in N with a `direction` (`"-Z"`, `"+X+Y"`, `[x,y,z]`) or
-  as a vector `[fx, fy, fz]`, spread over the referenced faces; `pressure` in
+  as a vector `[fx, fy, fz]`, spread over the referenced faces; `bearing` in
+  N, with a direction across the axis, for what presses on the wall of a hole
+  (a pin, screw, shaft or ball bearing) or of a boss (a hub); `pressure` in
   MPa pushing on the face; `gravity=true` adds self weight. Loads from mating
-  parts go in as forces on the faces or holes they act on (a motor's weight
-  on its pilot bore and screw holes, a belt pull on a pulley seat).
+  parts go in on the faces or holes they act on: a motor's weight on its
+  pilot bore and a belt pull on a pulley seat as `bearing`, a clamping force
+  on a flat face as `force`.
+- **Bearing or force on a hole**: a `bearing` load only pushes, on the side
+  of the wall it presses against, as a contact pressure that follows the
+  cosine of the angle to the load (peak 4F / (π d t), which the reply
+  states). A `force` on a hole is spread over the whole wall and also pulls
+  on its far side: right for a bonded or threaded connection loaded along
+  its axis, but across the axis it halves the stress beside the hole, and
+  the reply says so. A stepped hole takes a bearing load on its smallest
+  diameter, where the screw or pin passes; `"d": 22` in the load picks
+  another (a bearing seat). Several holes in one reference share the load
+  in proportion to their wall area.
 - **Material**: from `project.json` (`parts.<Part>.material`, else the
   project material) via the material table (E, ν, yield — see them first with
   `lookup_standard(material="PETG")`), or
   `material="6061-T6"` / `{"E": 2100, "nu": 0.38, "yield": 50}` (MPa).
   Part-level overrides: `parts.<Part>.youngs_modulus_mpa`, `poisson`,
-  `yield_mpa`.
+  `yield_mpa`. A **brittle** material (resin, acrylic and PMMA in the table;
+  `"brittle": true` in the material or `parts.<Part>.brittle` for another)
+  breaks without yielding: its `yield` is its breaking stress.
 - **Mesh**: a size from the part (at least two elements through its thinnest
-  wall, coarsened for large parts); `mesh_size` overrides. The refined solve
-  (size/1.5, to show convergence) runs by default only when the first mesh
-  has ≤ 50 000 nodes — the reply says when it was skipped; `refine=true`
-  forces it (minutes and several GB on big meshes), `refine=false` skips it.
+  wall, coarsened for large parts); `mesh_size` overrides. The same case
+  meshes the same on every run. The `mesh` line ends with the worst
+  element's scaled Jacobian (1 undistorted, 0 folded over); a note names
+  badly distorted elements at curved faces, where the stress is less
+  accurate. Every case is solved on two meshes to show convergence: the
+  first and a finer one (size/1.5), which is then the result. When the first
+  has more than 50 000 nodes the second is coarser instead (size × 1.5) and
+  the first stays the result, and the reply says so; `refine=true` forces
+  the finer one (minutes and several GB on big meshes). `refine=false`
+  solves once, for a quick look: checks on such a result fail.
 - The case is saved in `fea.json` under its name; `analyze(case="motor_load")`
   re-runs it. Failed cases are not saved; `save=false` keeps an exploratory
   case out of `fea.json`.
@@ -48,7 +69,12 @@ analyze(project="bracket", case="motor_load",
   `material={…, "density": g/cm³}`). Reports the first frequencies and how
   mode 1 moves; notes an equal pair (a symmetric section) and 0 Hz rigid-body
   modes (the part is not held). Keep the first frequency well above any
-  forcing frequency (motor speed, step rate, vibration source).
+  forcing frequency (motor speed, step rate, vibration source). The
+  frequencies are **upper bounds**: only the part's own mass is in the
+  analysis and its supports are rigid. A part that carries something (a
+  motor on its mount, a load on a shelf) vibrates far lower than computed,
+  and carried mass cannot be given yet: do not clear a motor speed for a
+  loaded part on this result alone.
 - **Buckling** — `analysis="buckling"`, `modes` (default 3): the load factor
   at which the given loads buckle the part ("buckles at 35.4 × the load").
   Negative factors mean the reversed load would buckle it. Linear buckling is
@@ -68,15 +94,38 @@ analyze(project="bracket", case="motor_load",
 - **stress**: the largest von Mises stress and where, with the **safety
   factor** against yield. Also the largest stress **away from the supports**:
   a rigid support's edge concentrates stress that a real bolt or clamp
-  spreads, so judge the part there.
-- **converge**: how much a finer mesh changes each result — displacement
-  (should change < 3 %), the peak stress and the stress away from the
-  supports, each marked ✓/✗ (frequency: f1 < 2 %; buckling: the factor
-  < 3 %). A `fea_*` check only carries a "not converged"
-  note for the quantity it checks. A peak stress that keeps rising is a
-  **singularity** —
+  spreads, so judge the part there. "Away" is further from the support faces
+  than a set distance, which the reply states: the part's thinnest wall (at
+  most 2/3 of its thinnest dimension), the same on every mesh. Set it with
+  `support_margin` (mm) in the case when the part needs another.
+- **brittle parts** are judged on their largest principal stress, not on
+  von Mises: by size, in tension or compression, against the breaking stress
+  (on the safe side in compression, where brittle materials are stronger).
+  Von Mises understates the stress that breaks them wherever tension acts in
+  more than one direction: a notch root, a held face. The reply and the
+  checks name the criterion each part was judged on.
+- **principal**: the largest tension and the largest compression, and where.
+  Tension across a print's layers is the direction it is weakest in.
+- **converge**: how much the finer of the two meshes changes each result —
+  displacement (should change < 3 %), the peak stress and the stress away
+  from the supports (< 10 %), each marked ✓/✗ (frequency: f1 < 2 %;
+  buckling: the factor < 3 %). A `fea_*` check **fails** when the quantity
+  it checks did not converge, or when the case was solved on one mesh only,
+  however far the value is inside its limit: an unconverged number is not
+  evidence. A peak stress that keeps rising is a **singularity** —
   a sharp internal corner, the edge of a rigid support, or a point-like
-  load. Add a fillet (and re-check), or judge the stress a little way off.
+  load. Add a fillet (and re-check), or judge the stress away from the
+  supports. Only when the value is good enough as it is, set
+  `"accept_unconverged": true` on the check: it then passes, and its value
+  says "not converged (accepted)" in the build report and the release README.
+- **outside the linear range**: the analysis is linear, so it holds for
+  stresses below the material's strength and for small deflections. When
+  the stress away from the supports is above the strength the reply says the
+  part yields (or breaks): the stresses are then not real and the deflection
+  is larger than shown, and a `fea_displacement` check on that case fails.
+  When the largest displacement is over 5 % of the part's longest dimension
+  the reply says the result is approximate, and too favourable where the
+  part is in compression.
 - **deflect**: the largest displacement and its direction — compare with
   what the function can tolerate (a motor mount's misalignment, a shelf's
   sag).
@@ -92,13 +141,16 @@ Put the requirement in `checks.json` against a saved case:
 ```
 A result counts for the build only while the part's geometry and the case
 (and material) are unchanged; otherwise the check fails as **stale** and
-names the case to re-run. `release` re-solves stale cases itself.
+names the case to re-run. `release` re-solves stale cases itself. A result
+also names the analysis method and the CalculiX and gmsh versions that
+produced it (the `solver` line), and goes stale when any of them changes: an
+update of this plugin or of FreeCAD re-solves the saved cases.
 
 **Bolted holes as supports**: a hole held as a rigid ring always shows a
 peak at its rim that grows with every mesh refinement — a modelling artefact
 (a real screw and washer spread the load). Decide up front how the part is
 judged and write the check that way: `fea_safety` with `"away_from_supports":
-true` judges the part a couple of elements away from the supports, and say
+true` judges the part beyond that distance from the supports, and say
 so in the report, with the rim peak. Bearing stress under a screw head in a
 plastic part is real — keep a washer in the design and the margin generous.
 Bracket between two models when it matters: holes only (conservative) vs the

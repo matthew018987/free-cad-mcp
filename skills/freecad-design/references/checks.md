@@ -29,18 +29,22 @@ Every check takes `"id"` (unique) and `"type"`, and may take `"note"`.
 | `hole_diameter` | `holes` (ref) or `object`, `d`, `tol` (0.01), `nominal` | every matched hole's smallest Ø equals `d`; with `nominal: true` the print compensation is subtracted first, so the check states the design Ø (`"d": 5.5` for an M5 clearance hole modelled at Ø5.7) and survives a compensation change. Tapped holes compare at the tap drill |
 | `face_count` | `object`, `surface` (plane, cylinder, cone, torus, sphere, any), `radius` + `tol` (0.01), `concave` (true/false), `count` or `min`/`max` | number of **distinct** surfaces (split faces of one cylinder count once): chamfers are cones, fillets and internal corner radii are concave cylinders, an OD is a convex cylinder |
 | `valid` | `object` | valid, closed solid |
-| `fea_safety` | `case` (an `analyze` case in fea.json), `min` (default 2), `away_from_supports` | yield ÷ max von Mises of the latest result ≥ min |
-| `fea_stress` | `case`, `max` (MPa), `away_from_supports` | max von Mises ≤ max |
-| `fea_displacement` | `case`, `max` (mm), `part` | max displacement ≤ max |
-| `fea_frequency` | `case` (a frequency case), `min` (Hz) | first natural frequency ≥ min |
-| `fea_buckling` | `case` (a buckling case), `min` | lowest positive buckling load factor ≥ min |
+| `fea_safety` | `case` (an `analyze` case in fea.json), `min` (default 2), `away_from_supports`, `accept_unconverged` | strength ÷ the stress the part is judged on ≥ min: yield ÷ max von Mises, or for a brittle material the breaking stress ÷ the largest principal stress |
+| `fea_stress` | `case`, `max` (MPa), `away_from_supports`, `accept_unconverged` | that stress ≤ max |
+| `fea_displacement` | `case`, `max` (mm), `part`, `accept_unconverged` | max displacement ≤ max |
+| `fea_frequency` | `case` (a frequency case), `min` (Hz), `accept_unconverged` | first natural frequency ≥ min |
+| `fea_buckling` | `case` (a buckling case), `min`, `accept_unconverged` | lowest positive buckling load factor ≥ min |
 
 The `fea_*` checks read the latest `analyze` result for their case; on a
 multi-part case the static ones judge every part (each against its own yield)
 unless they name a `part`, and a check on the wrong kind of case errors. It counts
 only while the part's geometry and the case (and material) are unchanged;
 otherwise the check fails as stale and names the case to re-run (`release`
-re-solves stale cases itself). See `references/fea.md`.
+re-solves stale cases itself). A check also fails when the quantity it checks
+did not converge between the case's two meshes, or when the case was solved
+on one mesh (`refine=false`): `"accept_unconverged": true` on the check is
+the explicit way to pass it anyway, and its value then says so. See
+`references/fea.md`.
 
 What counts as a hole: a concave cylinder that wraps at least half a turn,
 with any concave cones on the same axis (countersinks, drill points). Fillets,

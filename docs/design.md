@@ -563,6 +563,15 @@ bolted-joint rule) from a per-project `tolerances.json`, checked on every build,
 balloon numbers, priced in `check_manufacturing` and listed for inspection in the release. Its stdlib core
 (`server/tolerancing.py`, with the `lookup_standard` gdt / joint / surface keys) is built; the rest follows.
 
+**FEA fixes** (planned in [fea-plan.md](fea-plan.md)): a review of M5 against benchmarks beyond beams. Phase 1
+is built: results carry the analysis method and solver versions and go stale when those change; meshes are the
+same on every run and no curved element folds over; the zone "away from the supports" is measured by distance to
+the support faces, with a margin from the part; brittle materials are judged on their largest principal stress; a
+`bearing` load presses on the side of a hole a pin, screw or shaft bears against; a check fails on a result that
+has not converged unless it sets `accept_unconverged`; results outside the linear range and frequency results say
+what they do not cover. Phases 2 (supports, loads and results still missing) and 3 (an FEA report in the release
+package first) follow.
+
 ### Implementation map
 
 | File | Role |
@@ -585,7 +594,7 @@ balloon numbers, priced in `check_manufacturing` and listed for inspection in th
 | `tests/test_sheet_metal.py` | Bent sheet metal: folding, flat pattern maths, DFM, flat-pattern DXF, eval case solutions |
 | `tests/test_analysis.py` … `test_evals_plugin.py` | Hardening suites per area: analysis (123), drawings (115), manufacture/standards (116), worker/fclib (110), server (245), reload addon (46), evals/plugin (66) |
 | `tests/test_features.py` | fc.faces, shell, draft, linear / polar patterns, mirror (holes matched on every copy, pattern of a pattern), fasteners (volumes, seating, check_fit stack-ups), lookup_standard(fastener) |
-| `server/fea.py`, `tests/test_fea.py` | Linear-static FEA: case setup on a copy of the part, gmsh mesh, CalculiX solve, result summary, plot; tests against beam theory |
+| `server/fea.py`, `tests/test_fea.py`, `tests/test_fea_benchmarks.py` | FEA (static, frequency, buckling): case setup on a copy of the part, gmsh mesh, CalculiX solve, result summary, plot; tests against beam theory, and benchmarks where parts fail: a hole in a pulled strip (stress concentration), a thick tube under pressure (Lamé), a lug pulled by a pin (bearing load) |
 | `server/tolerancing.py`, `tests/test_tolerancing.py` | Tolerancing core (stdlib, tested without FreeCAD): requirement parsing and the scheme rules, feature control frame / datum / surface texture SVGs, stack-ups (worst case, RSS, Monte Carlo, contributions, IT allocation), the bolted-joint rule, inspection rows and stable balloon numbers; `lookup_standard` gdt / joint / surface (78 checks) |
 | `scripts/build_plugin.py` | Builds and validates `dist/` (plugin zip, `.mcpb`, generated `claude plugin eval` suite) |
 | `freecad-addon/` | MCP Reload addon + macro |

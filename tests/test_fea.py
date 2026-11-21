@@ -53,6 +53,34 @@ fc.holes(body, on=fc.face(body, "-Y"), at=[(P.width / 2, -15), (P.width / 2, -15
          spec="M5 clearance normal")
 fc.fillet(body, fc.edges(body, kind="line", parallel="X", at=0, axis="Z"), P.corner_r)
 """
+# a face slanted across a 40 mm cube (its bounding box is the whole cube) and a grid of points in the cube:
+# which points lie within 5 mm of the face, against their distance to the plane x = z
+ZONE = '''import numpy as np
+import fea
+f = Part.Face(Part.makePolygon([App.Vector(0, 0, 0), App.Vector(40, 0, 40), App.Vector(40, 40, 40),
+                                App.Vector(0, 40, 0), App.Vector(0, 0, 0)]))
+g = np.mgrid[0:41:2, 0:41:2, 0:41:2].reshape(3, -1).T.astype(float)
+near = fea._within(g, fea._sample_faces([f], 5.0 / 6), 5.0)
+d = np.abs(g[:, 0] - g[:, 2]) / 2 ** 0.5
+fc.result(points=len(g), near=int(near.sum()), wrong=int((near != (d <= 5.0)).sum()))
+'''
+# a thick tube meshed twice at the size its refined solve uses (curved elements folded over there, and every run
+# gave another mesh), then once with every curved element counted as folded, so that all are straightened
+MESH = '''import types
+import numpy as np
+import fea
+prefs = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh")
+before = prefs.GetInts()
+tube = Part.makeCylinder(20, 80).cut(Part.makeCylinder(10, 80))
+def model():
+    return types.SimpleNamespace(labels=["Tube"], parts=[None], solid_owner=[0],
+                                 compound=Part.makeCompound(tube.Solids))
+a, b = fea.Mesh(model(), 3.333), fea.Mesh(model(), 3.333)
+fea.MIN_JACOBIAN = 0.999
+c = fea.Mesh(model(), 5.0)
+fc.result(same=bool(a.nodes == b.nodes and np.array_equal(a.xyz, b.xyz)), quality=a.quality, forced=c.quality,
+          prefs_kept=before == prefs.GetInts())
+'''
 ROOT = os.path.dirname(HERE)
 E_6061, RHO_6061 = 68900.0, 2.70e-9          # MPa, t/mm³ — the material table's 6061-T6
 TIMES = {}
@@ -115,6 +143,12 @@ def result(pdir, case):
     return json.load(open(os.path.join(pdir, "out", "fea", case, "result.json")))
 
 
+def script_result(txt):
+    """The fc.result(...) JSON block of a run_script reply."""
+    m = re.search(r"^result\n((?:  .*\n?)+)", txt, re.M)
+    return json.loads(m.group(1)) if m else {}
+
+
 def project(c, home, name, model, prm, material="6061-T6"):
     c.tool("create_project", {"name": name, "template": "part", "process": "cnc", "material": material})
     pdir = os.path.join(home, name)
@@ -154,6 +188,8 @@ def main():
     check("root bending stress ≈ 60 MPa (M·c/I)", s and 54 <= s <= 70, txt)
     sa = num(r"away from the supports: ([\d.]+) MPa", txt)
     check("…away from the support ≈ 57 MPa (theory at x≈4.5: 57.3)", sa and 52 <= sa <= 62, txt)
+    check("…and says how far from the support that is: the part's thinnest wall, at most 2/3 of its thinnest "
+          "dimension", "(over 6.67 mm from a support)" in txt, txt)
     check("safety factor against 276 MPa yield", re.search(r"safety factor 4\.\d+ against yield 276", txt), txt)
     check("reactions balance the applied load", "✓ in equilibrium" in txt and "100.00) N" in txt, txt)
     check("refined mesh: converged (a small first mesh is re-solved finer by default)", "converged ✓" in txt, txt)
@@ -164,12 +200,26 @@ def main():
     check("result.json has the evidence", res["case"] == "tip" and res["inputs_sha1"] and res["case_hash"]
           and abs(res["max_disp"] - d) < 1e-3 and res.get("analysis") == "static" and res.get("threads", 0) >= 1,
           res.keys())
+    check("…with the analysis method and the programs behind it, as the report says",
+          isinstance(res.get("method"), int) and (res.get("versions") or {}).get("calculix") and re.search(
+              r"solver    CalculiX [\d.]+, gmsh [\d.]+, FreeCAD [\d.]+ \(analysis method %s\)" % res.get("method"),
+              txt), (res.get("method"), res.get("versions"), txt))
+    check("principal stresses: the largest tension is on top of the cantilever and the largest compression below, "
+          "equal in size",
+          res["max_principal_at"][2] > 9 and res["min_principal_at"][2] < 1
+          and abs(res["max_principal"] + res["min_principal"]) < 0.15 * res["max_principal"]
+          and re.search(r"principal largest tension [\d.]+ MPa at \(.*\) · largest compression -[\d.]+ MPa", txt)
+          and res.get("criterion") == "von Mises" and res["max_stress"] == res["max_vm"], (res, txt))
+    check("…and the mesh's worst element: the scaled Jacobian (1 is undistorted, 0 folded over)",
+          re.search(r"mesh      tet10, .* · scaled Jacobian ≥ [01]\.\d+", txt)
+          and res.get("mesh_quality", {}).get("min_jacobian", 0) > 0.3 and res["mesh_quality"]["straightened"] == 0,
+          (res.get("mesh_quality"), txt))
     single = res["max_disp"]
     fj = json.load(open(os.path.join(pdir, "fea.json")))
     check("case saved in fea.json", fj["cases"]["tip"]["fixed"] == ["Beam.face(-X)"], fj)
 
-    err, txt2, _ = c.tool("analyze", {"project": "beam", "case": "tip", "refine": False})
-    check("saved case re-runs by name", not err and "case 'tip'" in txt2, txt2)
+    err, txt2, _ = c.tool("analyze", {"project": "beam", "case": "tip"})
+    check("saved case re-runs by name", not err and "case 'tip'" in txt2 and "converged ✓" in txt2, txt2)
     before = result(pdir, "tip")
     err, txt3, _ = c.tool("analyze", {"project": "beam", "case": "tip", "params": {"h": 14}, "refine": False})
     after = result(pdir, "tip")
@@ -181,6 +231,87 @@ def main():
     err, txt4, _ = c.tool("lookup_standard", {"material": "PETG"})
     check("lookup_standard(material) gives the values analyze uses", not err and "E 2100 MPa" in txt4
           and "yield 50 MPa" in txt4, txt4)
+
+    print("the zone away from the supports")
+    tip = {"project": "beam", "case": "margin", "fixed": ["Beam.face(-X)"], "refine": False, "save": False,
+           "loads": [{"ref": "Beam.face(+X)", "force": 100, "direction": "-Z"}]}
+    err, txt, _ = c.tool("analyze", dict(tip, support_margin=12))
+    sa12 = num(r"away from the supports: ([\d.]+) MPa", txt)
+    check("support_margin=12 moves it: M·c/I at x = 12 is 52.8 MPa", not err and sa12
+          and abs(sa12 - 52.8) / 52.8 < 0.02
+          and "(over 12.00 mm from a support)" in txt, txt)
+    r12 = result(pdir, "margin") if not err else {}
+    err, txt, _ = c.tool("analyze", dict(tip, support_margin=12))
+    again = result(pdir, "margin") if not err else {}
+    check("the same case twice gives the same mesh and the same numbers", r12.get("nodes") and all(
+        r12.get(k) == again.get(k) for k in ("nodes", "elements", "max_vm", "max_disp", "max_stress_away")),
+        [(r12.get(k), again.get(k)) for k in ("nodes", "max_vm", "max_disp")])
+    err, txt, _ = c.tool("analyze", dict(tip, support_margin=0))
+    check("support_margin=0 → refused", err and "support_margin must be" in txt, txt)
+    err, txt, _ = c.tool("run_script", {"code": ZONE})
+    z = script_result(txt)
+    check("the zone is measured to the support face itself: every point of a grid within 5 mm of a slanted face, and "
+          "no other (the face's bounding box would take all %s)" % z.get("points"),
+          not err and z.get("wrong") == 0 and z.get("near") == 2835 and z.get("points") == 9261, txt)
+
+    print("the mesh: repeatable, and no element folded over")
+    err, txt, _ = c.tool("run_script", {"code": MESH}, timeout=600)
+    z = script_result(txt)
+    check("a curved part meshes the same on every run, with FreeCAD's gmsh preferences left as they were",
+          not err and z.get("same") is True and z.get("prefs_kept") is True, txt)
+    check("…and no curved element folds over (scaled Jacobian %s)" % (z.get("quality") or {}).get("min_jacobian"),
+          (z.get("quality") or {}).get("min_jacobian", 0) > 0.3 and z["quality"]["straightened"] == 0, z)
+    check("…elements that do fold over get straight edges (%s here, forced)" % (z.get("forced") or {}).get(
+        "straightened"), (z.get("forced") or {}).get("straightened", 0) > 500
+        and z["forced"]["min_jacobian"] >= 0.999, z)
+
+    print("a brittle material is judged on its principal stresses")
+    light = dict(tip, case="brittle", loads=[{"ref": "Beam.face(+X)", "force": 10, "direction": "-Z"}])
+    err, txt, _ = c.tool("analyze", dict(light, material="resin"))
+    br = result(pdir, "brittle") if not err else {}
+    big = max(abs(br.get("max_principal", 0)), abs(br.get("min_principal", 0)))
+    check("resin is brittle: judged on its largest principal stress against the breaking stress, and says so",
+          not err and br.get("criterion") == "principal" and abs(br["max_stress"] - big) < 1e-9
+          and abs(br["safety_factor"] - 50 / big) < 1e-6 and "resin: E 2500 MPa, ν 0.380, brittle, breaking stress "
+          "50 MPa" in txt and re.search(r"stress    max principal stress [\d.]+ MPa at .* against the breaking "
+                                        r"stress 50 MPa", txt) and "not on von Mises" in txt, txt)
+    check("…5.6 MPa away from the support, as the bending stress there (M·c/I at x = 6.67)",
+          abs((br.get("max_stress_away") or 0) - 5.6) < 0.15, br.get("max_stress_away"))
+    err, txt, _ = c.tool("analyze", dict(light, material={"E": 2500, "nu": 0.38, "yield": 50}))
+    check("the same values without the flag → von Mises against yield", not err
+          and result(pdir, "brittle").get("criterion") == "von Mises" and "against yield 50 MPa" in txt, txt)
+    err, txt, _ = c.tool("analyze", dict(light, material={"E": 2500, "nu": 0.38, "yield": 50, "brittle": True}))
+    check("material={…, \"brittle\": true} → the principal stress", not err
+          and result(pdir, "brittle").get("criterion") == "principal" and "max principal stress" in txt, txt)
+    err, txt, _ = c.tool("lookup_standard", {"material": "acrylic"})
+    check("lookup_standard(material) says which materials are brittle", not err and "brittle: analyze judges it on "
+          "its largest principal stress" in txt, txt)
+
+    print("outside the range of a linear analysis")
+    held = {"project": "beam", "fixed": ["Beam.face(-X)"]}
+    err, txt, _ = c.tool("analyze", dict(held, case="overload", loads=[
+        {"ref": "Beam.face(+X)", "force": 600, "direction": "-Z"}]))
+    over = result(pdir, "overload") if not err else {}
+    check("600 N: the beam yields away from the support, and the reply says its numbers are no longer real",
+          not err and over.get("beyond_yield") is True and over.get("large_deflection") is False
+          and "Beam yields (" in txt and "the deflection is larger than shown" in txt, txt)
+    err, txt, _ = c.tool("analyze", dict(held, case="soft", material="PETG", loads=[
+        {"ref": "Beam.face(+X)", "force": 30, "direction": "-Z"}]))
+    soft = result(pdir, "soft") if not err else {}
+    check("a PETG beam bent by 6 % of its length: a large deflection, for which the result is approximate",
+          not err and soft.get("large_deflection") is True and soft.get("beyond_yield") is False
+          and "is 6 % of the longest dimension (100.0 mm)" in txt, txt)
+    json.dump([{"id": "sag-over", "type": "fea_displacement", "case": "overload", "max": 10},
+               {"id": "sag-soft", "type": "fea_displacement", "case": "soft", "max": 10}],
+              open(os.path.join(pdir, "checks.json"), "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("a deflection check on a part that yields fails, however small the linear deflection",
+          re.search(r"✗ sag-over\s+fea_displacement\s+3\.\d+ mm \(≤ 10\.0000\), beyond yield", txt)
+          and "the real deflection is larger" in txt, txt)
+    check("…and one on a large deflection passes with the caveat", re.search(
+        r"✓ sag-soft\s+fea_displacement\s+5\.\d+ mm \(≤ 10\.0000\)   max displacement, case 'soft'; a large "
+        r"deflection", txt), txt)
+    json.dump([], open(os.path.join(pdir, "checks.json"), "w"))
 
     print("uniform pressure 0.1 MPa on the top face (w = 1 N/mm)")
     err, txt, _ = c.tool("analyze", {"project": "beam", "case": "press", "fixed": ["Beam.face(-X)"],
@@ -212,6 +343,8 @@ def main():
           4.5 * f[0] < f[2] < 6.3 * f[0] and any(abs(x - 12630) / 12630 < 0.02 for x in f), f)
     check("…converged on a finer mesh, mode shapes plotted", "finer mesh changes f1" in txt and "✓" in txt
           and any(x["type"] == "image" for x in content), txt)
+    check("…and called upper bounds: the mass the part carries and its real fixings are not in the analysis",
+          "these are upper bounds: only the part's own mass" in txt and "lower the frequencies" in txt, txt)
     err, txt, _ = c.tool("analyze", {"project": "beam", "case": "modes2", "analysis": "frequency", "modes": 2,
                                      "fixed": ["Beam.face(-X)"],
                                      "loads": [{"ref": "Beam.face(+X)", "force": 100, "direction": "-Z"}],
@@ -252,11 +385,29 @@ def main():
                                      "loads": [{"ref": "Plate.face(+X)", "force": [0, 0, -20]}]})
     check("bolt holes as supports, vector force, equilibrium",
           not err and "Plate.holes(d=5.5)" in txt and "✓ in equilibrium" in txt and "5052" in txt, txt)
+    check("…the peak at the rim of a rigidly held hole keeps growing with the mesh; the stress away from the "
+          "holes and the sag have converged", re.search(r"peak stress \d+\.\d % ✗ · stress away from supports "
+                                                        r"\d\.\d % ✓", txt) and "displacement 0." in txt, txt)
     json.dump([{"id": "shank-gap", "type": "radial_gap", "a": "Plate.holes(d=5.5)", "b": "Screws.bosses(d=5)",
-                "min": 0.2}], open(os.path.join(ppd, "checks.json"), "w"))
+                "min": 0.2},
+               {"id": "rim", "type": "fea_stress", "max": 100},
+               {"id": "rim-accepted", "type": "fea_stress", "max": 100, "accept_unconverged": True},
+               {"id": "body", "type": "fea_safety", "min": 3, "away_from_supports": True},
+               {"id": "sag", "type": "fea_displacement", "max": 0.2}], open(os.path.join(ppd, "checks.json"), "w"))
     err, txt, _ = c.tool("build", {"project": "plate", "views": []})
     check("radial_gap against a pattern of shanks pairs each hole with its own", re.search(
         r"✓ shank-gap\s+radial_gap\s+0\.250", txt), txt)
+    check("a check on a stress that has not converged fails, however far inside its limit, and says what to do",
+          re.search(r"✗ rim\s+fea_stress\s+[\d.]+ MPa \(≤ 100\.000\), not converged", txt)
+          and "the peak stress changed" in txt and "away_from_supports" in txt and "accept_unconverged" in txt, txt)
+    check("…\"accept_unconverged\": true lets it pass, and the value says it was accepted",
+          re.search(r"✓ rim-accepted\s+fea_stress\s+[\d.]+ MPa \(≤ 100\.000\), not converged \(accepted\)", txt),
+          txt)
+    check("…checks on what did converge pass: the stress away from the supports and the displacement",
+          re.search(r"✓ body\s+fea_safety\s+[\d.]+ \(≥ 3\.00\)   max von Mises away", txt)
+          and re.search(r"✓ sag\s+fea_displacement\s+0\.\d+ mm \(≤ 0\.2000\)   max", txt), txt)
+    json.dump([{"id": "shank-gap", "type": "radial_gap", "a": "Plate.holes(d=5.5)", "b": "Screws.bosses(d=5)",
+                "min": 0.2}], open(os.path.join(ppd, "checks.json"), "w"))
     err, txt, _ = c.tool("check_fit", {"project": "plate", "contact_ok": ["Plate|Screws"], "render": False})
     check("contact_ok takes 'A|B' pairs as well as lists", not err, txt[:400])
     pj = json.load(open(os.path.join(ppd, "project.json")))
@@ -340,11 +491,12 @@ def main():
                                      "fixed": ["Lower.face(-X)"],
                                      "loads": [{"ref": "Upper.face(+X)", "force": 10, "direction": "-Z"}]})
     check("a load on a part outside the case → says to analyse them together", err and "parts=[" in txt, txt)
-    json.dump([{"id": "assy-strength", "type": "fea_safety", "case": "bonded", "min": 2},
+    json.dump([{"id": "assy-strength", "type": "fea_safety", "case": "bonded", "min": 2, "away_from_supports": True},
                {"id": "upper-sag", "type": "fea_displacement", "case": "bonded", "part": "Upper", "max": 0.5}],
               open(os.path.join(spd, "checks.json"), "w"))
     err, txt, _ = c.tool("build", {"project": "stack", "views": []})
-    check("multi-part fea checks: safety over every part passes, a part's sag over its limit fails",
+    check("multi-part fea checks: safety over every part (away from the supports) passes, a part's sag over its "
+          "limit fails",
           re.search(r"✓ assy-strength\s+fea_safety\s+\d\.\d\d \(≥ 2", txt)
           and re.search(r"✗ upper-sag\s+fea_displacement\s+0\.5\d+ mm \(≤ 0\.5", txt) and "in Upper" in txt, txt)
     json.dump(params(t_up=6), open(os.path.join(spd, "params.json"), "w"))
@@ -352,17 +504,23 @@ def main():
     check("changing one part of the assembly makes its result stale", "stale" in txt
           and "analyze(case='bonded')" in txt, txt)
 
-    print("speed: the refined solve is skipped when the first mesh is already large (F3)")
+    print("speed: a large first mesh is compared with a coarser one, not with a finer one (F3)")
     err, txt, _ = timed(c, "large first mesh (auto)", {"project": "beam", "case": "fine", "fixed": ["Beam.face(-X)"],
                                                        "loads": [{"ref": "Beam.face(+X)", "force": 100,
                                                                   "direction": "-Z"}],
                                                        "mesh_size": 1.0, "save": False})
-    nodes = num(r"refined solve skipped: ([\d ]+) nodes", txt)
-    check("…says so, with the node count and how to force it", not err and nodes and nodes > 50000
-          and "pass refine=true to force" in txt and "finer mesh changes" not in txt, txt)
+    nodes = num(r"a finer one than these ([\d ]+) nodes takes minutes", txt)
+    check("…says so, with the node counts and how to get the finer one", not err and nodes and nodes > 50000
+          and "convergence is shown against a coarser mesh (1.50 mm, " in txt and "refine=true solves it" in txt
+          and re.search(r"at 1\.00 mm \(also solved at 1\.50 mm: [\d ]+ nodes\)", txt), txt)
+    check("…and convergence is still shown: the 1 mm mesh against the 1.5 mm one", re.search(
+        r"converge  finer mesh changes displacement 0\.\d % ✓", txt), txt)
     d = num(r"max displacement ([\d.]+) mm", txt)
-    check("…and the single solve is still accurate (within 1 % of the converged tip deflection)",
+    check("…the result is accurate (within 1 % of the converged tip deflection)",
           d and abs(d - single) / single < 0.01, txt)
+    sa1 = num(r"away from the supports: ([\d.]+) MPa", txt)
+    check("…with the same stress away from the support (%s vs %s MPa): the zone comes from the part, not the mesh"
+          % (sa1, sa), sa1 and abs(sa1 - sa) / sa < 0.015, txt)
 
     print("fea checks in checks.json")
     json.dump([{"id": "strength", "type": "fea_safety", "case": "tip", "min": 3},
@@ -383,6 +541,39 @@ def main():
           and re.search(r"✗ too-high\s+fea_frequency\s+8\d\d\.\d Hz \(≥ 1 ?000", txt), txt)
     check("fea_frequency on a static case → says it needs a frequency case",
           "case 'tip' is a static analysis — fea_frequency needs a frequency case" in txt, txt)
+    err, txt, _ = c.tool("analyze", {"project": "beam", "case": "once", "fixed": ["Beam.face(-X)"], "refine": False,
+                                     "loads": [{"ref": "Beam.face(+X)", "force": 100, "direction": "-Z"}]})
+    check("refine=false solves one mesh and says its checks will fail", not err
+          and "solved on one mesh only (refine=false)" in txt and "converge  " not in txt, txt)
+    json.dump([{"id": "strength", "type": "fea_safety", "case": "tip", "min": 3},
+               {"id": "once", "type": "fea_safety", "case": "once", "min": 3},
+               {"id": "once-accepted", "type": "fea_safety", "case": "once", "min": 3, "accept_unconverged": True}],
+              open(os.path.join(pdir, "checks.json"), "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("a result solved on one mesh is no evidence: its check fails unless it accepts that",
+          re.search(r"✗ once\s+fea_safety\s+4\.\d+ \(≥ 3\.00\), not converged", txt)
+          and "solved on one mesh only" in txt and "Re-run it without refine=false" in txt
+          and re.search(r"✓ once-accepted\s+fea_safety\s+4\.\d+ \(≥ 3\.00\), not converged \(accepted\)", txt)
+          and re.search(r"✓ strength\s+fea_safety\s+4\.\d+ \(≥ 3\.00\)   max", txt), txt)
+    rp = os.path.join(pdir, "out", "fea", "tip", "result.json")
+    kept = open(rp).read()
+    old = json.loads(kept)
+    json.dump(dict(old, method=old["method"] - 1), open(rp, "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("a result from an older analysis method is stale", re.search(r"✗ strength\s+fea_safety\s+stale", txt)
+          and "analysis method" in txt and "analyze(case='tip')" in txt, txt)
+    json.dump(dict(old, versions=dict(old["versions"], calculix="0.1")), open(rp, "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("…and so is one solved by another CalculiX", re.search(r"✗ strength\s+fea_safety\s+stale", txt)
+          and "solved with CalculiX 0.1" in txt, txt)
+    # as main wrote it: no stamp, and a case hash method 2 no longer gives (a brittle material gained its flag)
+    json.dump(dict({k: v for k, v in old.items() if k not in ("method", "versions")}, case_hash="0" * 40),
+              open(rp, "w"))
+    err, txt, _ = c.tool("build", {"project": "beam", "views": []})
+    check("…and an unstamped result names the method, not a model or case change the user never made",
+          re.search(r"✗ strength\s+fea_safety\s+stale\s+it comes from analysis method 1, now %d" % old["method"], txt)
+          and "the model or case changed" not in txt, txt)
+    open(rp, "w").write(kept)
     p = params(length=100, w=10, h=12)
     json.dump(p, open(os.path.join(pdir, "params.json"), "w"))
     json.dump([{"id": "strength", "type": "fea_safety", "case": "tip", "min": 3},

@@ -3,23 +3,28 @@
 buckling of one part, or of several parts bonded together.
 
 Supports, loads and bonded faces are faces or holes chosen with the usual
-geometry references. gmsh meshes the parts (second-order tetrahedra) and labels
-every mesh face and element with the solid face and solid it lies on, so the
-sets are exact — also on two coincident faces of different parts. This module
-writes the CalculiX input itself (each part its own material, bonded face pairs
-tied with *TIE), runs ccx on all cores and reads its results with numpy.
+geometry references. gmsh meshes the parts (second-order tetrahedra, the same
+mesh on every run) and labels every mesh face and element with the solid face
+and solid it lies on, so the sets are exact — also on two coincident faces of
+different parts. This module writes the CalculiX input itself (each part its
+own material, bonded face pairs tied with *TIE, a bearing load as the pressure
+of a pin on the side of the hole it presses against), runs ccx on all cores
+and reads its results with numpy.
 
-The result is evidence, not a picture. static: the largest von Mises stress and
-where (also away from the supports, where rigid fixtures inflate it), the
-largest displacement and where, the safety factor against yield (per part), the
-support reactions against the applied load (equilibrium). frequency: the first
-natural frequencies and the mode shapes (loads are not used). buckling: the
-factors by which the loads must grow to buckle the part, and the mode shape.
-A re-run on a finer mesh shows the numbers have converged when the first mesh
-is small enough to afford it.
+The result is evidence, not a picture. static: the stress each part is judged
+on and where (von Mises, or for a brittle material the largest principal
+stress; also away from the supports, where rigid fixtures inflate it), the
+principal stresses, the largest displacement and where, the safety factor (per
+part), the support reactions against the loads (equilibrium). frequency: the
+first natural frequencies and the mode shapes (loads are not used). buckling:
+the factors by which the loads must grow to buckle the part, and the mode
+shape. A second mesh, finer or for a large first mesh coarser, shows whether
+the numbers have converged. Every result names the method version and the
+programs that produced it, and is stale once those change.
 
 Limits: linear elastic, small displacements, isotropic material, rigid
 supports; bonded faces are glued (no contact, sliding or bolt preload)."""
+import contextlib
 import hashlib
 import json
 import math
@@ -35,6 +40,8 @@ from FreeCAD import Vector
 
 import analysis as an
 
+METHOD = 2               # version of the analysis method: raise it when the same case on the same geometry would
+                         # give different numbers, so that results from an older method go stale (1: no stamp)
 REFINE = 1.5             # finer mesh = size / REFINE
 MAX_ELEMENTS = 200000    # estimated elements: coarsen the first mesh above this (time, memory)
 AUTO_REFINE = 50000      # refine by default only while the first mesh has at most this many nodes
@@ -44,8 +51,13 @@ GRAVITY = 9810.0         # mm/s²
 CCX_TIMEOUT = 1800       # s per CalculiX run
 ANALYSES = ("static", "frequency", "buckling")
 DEFAULT_MODES = {"frequency": 6, "buckling": 3}
+LARGE_DEFLECTION = 0.05  # of the parts' longest dimension: above it a linear (small-deflection) result is approximate
 TITLES = {"static": "linear static", "frequency": "natural frequencies", "buckling": "linear buckling"}
+MAT_KEYS = ("name", "E", "nu", "yield", "density", "brittle", "source", "note")     # of a material, kept in a result
+MIN_JACOBIAN = 0.02      # scaled Jacobian below which a curved element counts as folded over (and is straightened)
+POOR_JACOBIAN = 0.2      # … and below which it is reported as badly distorted
 C3D10_FACES = ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0))   # CalculiX tet faces S1..S4 (corner indices)
+C3D10_EDGES = ((0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3))  # corners of the mid-side nodes 5..10
 SMESH_TO_CCX = (1, 0, 2, 3, 4, 6, 5, 8, 7, 9)              # FreeCAD tet10 node order → CalculiX C3D10
 
 
@@ -107,7 +119,7 @@ def case_hash(case, mats):
     """Identity of a load case and the material(s) it was solved with — results are stale when
     this (or the model) changes. mats: the material of a one-part case, or {label: material}."""
     keep = {k: case.get(k) for k in ("part", "fixed", "loads", "gravity", "mesh_size", "refine")}
-    for k in ("parts", "bonded", "modes"):
+    for k in ("parts", "bonded", "modes", "support_margin"):
         if case.get(k):
             keep[k] = case[k]
     kind = str(case.get("analysis") or "static").strip().lower()
@@ -117,6 +129,8 @@ def case_hash(case, mats):
 
     def one(m):
         v = [round(float(m["E"]), 6), round(float(m["nu"]), 6), round(float(m["yield"]), 6)]
+        if m.get("brittle"):
+            v.append("brittle")
         return v + [round(float(m.get("density") or 0.0), 6)] if dens else v
     single = not isinstance(mats.get("E", {}), dict)
     keep["material"] = one(mats) if single else {k: one(v) for k, v in sorted(mats.items())}
@@ -181,8 +195,8 @@ class Model:
                     break
             self.face_owner.append(own)
 
-    def faces(self, ref):
-        """(part index, [compound face indices], label) of a face / hole / boss reference."""
+    def entity(self, ref):
+        """(part index, resolved reference) of a reference on one of the parts."""
         try:
             e = an.resolve(self.doc, ref)
         except an.RefError as ex:
@@ -194,7 +208,51 @@ class Model:
                                ref, " or ".join(self.labels), "s" if len(self.parts) > 1 else "",
                                "" if len(self.parts) > 1 else " (to include another part, analyse them together: "
                                "parts=[…] with bonded=[[face, face]])"))
-        k = self.parts.index(obj)
+        return self.parts.index(obj), e
+
+    def axis(self, ref):
+        """Unit axis of a hole, boss or cylindrical face reference (the first hole's), else None."""
+        _, e = self.entity(ref)
+        if e.kind in ("holes", "bosses"):
+            return Vector(e.feats()[0]["axis"])
+        if e.kind == "face" and e.shape.Surface.__class__.__name__ == "Cylinder":
+            return Vector(an._canon(e.shape.Surface.Axis))
+        return None
+
+    def cylinders(self, ref, d=None):
+        """(part index, [compound face indices], label, [diameters]) of the cylinder walls a bearing
+        load presses on: a cylindrical face, or of every referenced hole or boss the wall of one
+        diameter (d, else its smallest, where the screw, pin or shaft passes)."""
+        k, e = self.entity(ref)
+        want, diams = [], []
+        if e.kind in ("holes", "bosses"):
+            for h in e.feats():
+                cyl = [f for f in (self.shapes[k].Faces[int(n[4:]) - 1] for n in h["faces"])
+                       if f.Surface.__class__.__name__ == "Cylinder"]
+                have = sorted(set(round(2 * f.Surface.Radius, 4) for f in cyl))
+                if d is None:
+                    pick = have[0]
+                else:
+                    near = [x for x in have if min(abs(x - float(d)), abs(x - h.get("design_comp", 0.0) - float(d)))
+                            < 0.011]
+                    if not near:
+                        raise FeaError("%s has no Ø%s wall: its diameters are %s" % (
+                            ref, an._g(float(d)), ", ".join("Ø%s" % an._g(x) for x in have)))
+                    pick = near[0]
+                want += [f for f in cyl if abs(2 * f.Surface.Radius - pick) < 1e-4]
+                if pick not in diams:
+                    diams.append(pick)
+        elif e.kind == "face" and e.shape.Surface.__class__.__name__ == "Cylinder":
+            want, diams = [e.shape], [round(2 * e.shape.Surface.Radius, 4)]
+        else:
+            raise FeaError("%s is a %s: a bearing load presses on the wall of a hole, a boss or a cylindrical face "
+                           "(e.g. %s.holes(d=8)); on a flat face use pressure or force" % (
+                               ref, "flat face" if e.kind == "face" else e.kind, self.labels[k]))
+        return k, self._compound_faces(k, want, ref), e.label, diams
+
+    def faces(self, ref):
+        """(part index, [compound face indices], label) of a face / hole / boss reference."""
+        k, e = self.entity(ref)
         if e.kind in ("holes", "bosses"):
             names = []
             for h in (e.holes if e.kind == "holes" else e.bosses):
@@ -206,6 +264,10 @@ class Model:
             lb = self.labels[k]
             raise FeaError("%s is a %s — supports, loads and bonded faces go on faces or holes, e.g. %s.face(-Z) "
                            "or %s.holes(d=5.5)" % (ref, e.kind, lb, lb))
+        return k, self._compound_faces(k, want, ref), e.label
+
+    def _compound_faces(self, k, want, ref):
+        """Indices in the compound of faces of part k's shape."""
         out = []
         for f in want:
             hit = None
@@ -218,15 +280,16 @@ class Model:
                 raise FeaError("could not find %s among %s's faces" % (ref, self.labels[k]))
             if hit not in out:
                 out.append(hit)
-        return k, out, e.label
+        return out
 
 
 # ------------------------------------------------------------------ mesh
 
 def default_size(shapes):
-    """(size, note, thinnest wall) — mesh size from the parts: a third of the thinnest overall
-    dimension and at most half the thinnest wall (two second-order elements through it), clamped.
-    Coarsened only when the mesh would be very large — and then the note says so."""
+    """(size, note, thinnest wall, size from the parts alone) — mesh size from the parts: a third
+    of the thinnest overall dimension and at most half the thinnest wall (two second-order elements
+    through it), clamped. Coarsened only when the mesh would be very large — and then the note says
+    so; the last value is the size before that."""
     if not isinstance(shapes, (list, tuple)):
         shapes = [shapes]
     size, wall, vol = None, None, 0.0
@@ -244,7 +307,7 @@ def default_size(shapes):
             pass
         size = s if size is None else min(size, s)
         vol += shape.Volume
-    size = max(0.4, min(20.0, size))
+    size = base = max(0.4, min(20.0, size))
     est = vol / (0.118 * size ** 3)
     note = None
     if est > MAX_ELEMENTS:
@@ -253,7 +316,125 @@ def default_size(shapes):
         note = "mesh coarsened to %.2f mm to keep the solve within a minute or two%s — pass mesh_size to refine " \
                "(slower)" % (size, "; the thinnest wall (%s mm) gets fewer than 2 elements through it, so stress and "
                              "deflection there are less accurate" % an.fmt(wall, 2) if thin else "")
-    return round(size, 3), note, wall
+    return round(size, 3), note, wall, round(base, 3)
+
+
+def support_margin(case, base):
+    """How far from a support the "away from the supports" zone starts (mm): support_margin of the
+    case, else twice the size the parts alone give the mesh, which is their thinnest wall (at most
+    2/3 of their thinnest dimension). It comes from the parts, not from the mesh that was solved,
+    so the stress a part is judged on does not move with mesh_size."""
+    m = case.get("support_margin")
+    if m is None:
+        return 2.0 * base
+    try:
+        m = float(m)
+    except (TypeError, ValueError):
+        m = -1.0
+    if not m > 0:
+        raise FeaError("support_margin must be a distance in mm above 0, got %r" % (case.get("support_margin"),))
+    return m
+
+
+def _sample_faces(faces, step, limit=300000):
+    """Points on solid faces, about `step` apart at most (n, 3): a tessellation's triangles, each
+    filled with a regular grid."""
+    import numpy as np
+    tris = []
+    for f in faces:
+        pts, idx = f.tessellate(max(0.01, min(0.2, step / 5.0)))
+        if idx:
+            p = np.array([(v.x, v.y, v.z) for v in pts], dtype=float)
+            tris.append(p[np.array(idx, dtype=np.int64)])
+    if not tris:
+        return np.zeros((0, 3))
+    t = np.concatenate(tris)                                     # (m, 3 corners, xyz)
+    longest = np.sqrt(np.max([((t[:, i] - t[:, (i + 1) % 3]) ** 2).sum(axis=1) for i in range(3)], axis=0))
+    n = np.maximum(1, np.ceil(longest / step)).astype(np.int64)
+    total = int(((n + 1) * (n + 2) // 2).sum())
+    if total > limit:                    # very large faces: a coarser grid (the zone's rim loses a little)
+        n = np.maximum(1, np.ceil(n / math.sqrt(total / float(limit)))).astype(np.int64)
+    out = []
+    for k in np.unique(n):
+        i, j = np.meshgrid(np.arange(k + 1), np.arange(k + 1), indexing="ij")
+        keep = i + j <= k
+        w = np.stack([i[keep], j[keep], k - i[keep] - j[keep]], axis=1) / float(k)
+        out.append(np.einsum("qc,mcd->mqd", w, t[n == k]).reshape(-1, 3))
+    return np.concatenate(out)
+
+
+def _within(xyz, pts, r):
+    """Which of the points xyz (n, 3) lie within r of any of pts (m, 3). A grid of r-sized cells:
+    a point is compared with the pts of its own cell and of the 26 around it."""
+    import numpy as np
+    out = np.zeros(len(xyz), dtype=bool)
+    if not len(pts) or not len(xyz) or r <= 0:
+        return out
+    cand = np.flatnonzero(((xyz >= pts.min(axis=0) - r) & (xyz <= pts.max(axis=0) + r)).all(axis=1))
+    if not len(cand):
+        return out
+    lo = pts.min(axis=0) - 2.0 * r                               # so a candidate's neighbour cells are ≥ 0
+    cp = np.floor((pts - lo) / r).astype(np.int64)
+    cx = np.floor((xyz[cand] - lo) / r).astype(np.int64)
+    dims = cp.max(axis=0) + 3                                    # … and below dims
+
+    def key(c):
+        return (c[:, 0] * dims[1] + c[:, 1]) * dims[2] + c[:, 2]
+    kp = key(cp)
+    order = np.argsort(kp, kind="stable")
+    kp, pts = kp[order], pts[order]
+    cells, start, count = np.unique(kp, return_index=True, return_counts=True)
+    found = np.zeros(len(cand), dtype=bool)
+    for off in ((a, b, c) for a in (0, -1, 1) for b in (0, -1, 1) for c in (0, -1, 1)):
+        todo = np.flatnonzero(~found)
+        if not len(todo):
+            break
+        k = key(cx[todo] + np.array(off, dtype=np.int64))
+        i = np.minimum(np.searchsorted(cells, k), len(cells) - 1)
+        hit = cells[i] == k
+        rows, first, n = todo[hit], start[i[hit]], count[i[hit]]
+        for j in range(int(n.max()) if len(n) else 0):
+            m = (n > j) & ~found[rows]
+            if not m.any():
+                break
+            d = xyz[cand[rows[m]]] - pts[first[m] + j]
+            found[rows[m][(d * d).sum(axis=1) <= r * r]] = True
+    out[cand[found]] = True
+    return out
+
+
+@contextlib.contextmanager
+def _one_gmsh_thread():
+    """gmsh on one thread. On several it returns a different mesh on every run, so the same case
+    would give different numbers each time; one thread costs no time. FreeCAD passes gmsh its FEM
+    preference NumOfThreads, which is put back afterwards."""
+    prm = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh")
+    had = "NumOfThreads" in prm.GetInts()
+    old = prm.GetInt("NumOfThreads", 1)
+    prm.SetInt("NumOfThreads", 1)
+    try:
+        yield
+    finally:
+        if had:
+            prm.SetInt("NumOfThreads", old)
+        else:
+            prm.RemInt("NumOfThreads")
+
+
+def _tet10_gradients():
+    """Derivatives of the ten C3D10 shape functions at CalculiX's four integration points:
+    (4, 10, 3), with respect to the element's own coordinates."""
+    import numpy as np
+    a, b = 0.5854101966249685, 0.1381966011250105
+    dl = np.array([[-1.0, -1.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    out = np.zeros((4, 10, 3))
+    for g in range(4):
+        w = [a if i == g else b for i in range(4)]              # the point's four volume coordinates
+        for i in range(4):
+            out[g, i] = (4 * w[i] - 1) * dl[i]
+        for k, (i, j) in enumerate(C3D10_EDGES):
+            out[g, 4 + k] = 4 * (w[i] * dl[j] + w[j] * dl[i])
+    return out
 
 
 class Mesh:
@@ -275,8 +456,13 @@ class Mesh:
             m.CharacteristicLengthMax = "%g mm" % size
             m.ElementOrder = "2nd"
             m.CoherenceMesh = False          # each part keeps its own nodes; bonded faces are tied
+            try:                             # gmsh untangles the curved elements that fold over at a curved face
+                m.HighOrderOptimize = "Optimization"
+            except (AttributeError, TypeError, ValueError):
+                pass
             fdoc.recompute()
-            err = GmshTools(m).create_mesh()
+            with _one_gmsh_thread():
+                err = GmshTools(m).create_mesh()
             fm = m.FemMesh
             if err or fm.VolumeCount == 0:
                 raise FeaError("gmsh could not mesh %s at %g mm (%s) — try a different mesh_size" % (
@@ -316,6 +502,7 @@ class Mesh:
             App.closeDocument(fdoc.Name)
         self.pos = np.full(int(self.nid.max()) + 1, -1, dtype=np.int64)
         self.pos[self.nid] = np.arange(len(self.nid))
+        self.quality = self._untangle(model)
         # every element face (row 4·e + s is face s+1 of element e), sorted by its corner nodes
         tf = self.conn[:, [c for f in C3D10_FACES for c in f]].reshape(-1, 3)
         keys = _tri_keys(tf)
@@ -335,6 +522,34 @@ class Mesh:
         self.npart = np.full(len(self.nid), -1, dtype=np.int64)
         self.npart[self.pos[self.conn.ravel()]] = np.repeat(self.epart, 10)
 
+    def _untangle(self, model):
+        """No element may fold over: where the Jacobian determinant of a curved element is ≤ 0 at
+        an integration point CalculiX stops. The few that gmsh's optimiser leaves get straight
+        edges (their mid-side nodes go to the middle of their corners), which keeps them valid
+        and makes the surface locally faceted. Returns {min_jacobian, distorted, straightened}.
+        The scaled Jacobian is the smallest determinant over that of the straight-sided element:
+        1 is undistorted, 0 folded."""
+        import numpy as np
+        dn = _tet10_gradients()
+        straightened = np.zeros(len(self.eid), dtype=bool)
+        for attempt in range(5):
+            X = self.xyz[self.pos[self.conn]]
+            ref = np.einsum("mi,mi->m", np.cross(X[:, 1] - X[:, 0], X[:, 2] - X[:, 0]), X[:, 3] - X[:, 0])
+            if (ref <= 0).any():
+                raise FeaError("gmsh returned %d inverted elements for %s at %g mm: try a different mesh_size" % (
+                    int((ref <= 0).sum()), " + ".join(model.labels), self.size))
+            q = np.linalg.det(np.einsum("mai,gaj->mgij", X, dn)).min(axis=1) / ref
+            bad = q < MIN_JACOBIAN
+            if not bad.any():
+                return {"min_jacobian": round(float(q.min()), 3), "distorted": int((q < POOR_JACOBIAN).sum()),
+                        "straightened": int(straightened.sum())}
+            straightened |= bad
+            c = self.pos[self.conn[bad]]
+            for k, (i, j) in enumerate(C3D10_EDGES):
+                self.xyz[c[:, 4 + k]] = 0.5 * (self.xyz[c[:, i]] + self.xyz[c[:, j]])
+        raise FeaError("the mesh of %s at %g mm keeps %d elements folded over at a curved face: try a different "
+                       "mesh_size" % (" + ".join(model.labels), self.size, int(bad.sum())))
+
     @property
     def nodes(self):
         return len(self.nid)
@@ -353,16 +568,31 @@ class Mesh:
         import numpy as np
         return np.concatenate([self.tris[j] for j in faces]) if faces else np.zeros((0, 6), dtype=np.int64)
 
-    def element_faces(self, tris):
-        """(element ids, face numbers 1–4) of boundary triangles (tria6 node ids)."""
+    def _rows(self, tris):
+        """Rows (4 · element + face) of boundary triangles (tria6 node ids) in the element-face table."""
         import numpy as np
         k = _tri_keys(tris[:, :3])
         i = np.searchsorted(self._keys, k)
         i = np.minimum(i, len(self._keys) - 1)
         if not (self._keys[i] == k).all():
             raise FeaError("a face triangle has no element face — the mesh is inconsistent; try another mesh_size")
-        row = self._order[i]
+        return self._order[i]
+
+    def element_faces(self, tris):
+        """(element ids, face numbers 1–4) of boundary triangles (tria6 node ids)."""
+        row = self._rows(tris)
         return self.eid[row // 4], row % 4 + 1
+
+    def outward(self, tris):
+        """(unit outward normals, areas) of boundary triangles, taken flat between their corners."""
+        import numpy as np
+        row = self._rows(tris)
+        p = self.xyz[self.pos[tris[:, :3]]]
+        n = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
+        inside = self.xyz[self.pos[self.conn[row // 4, np.array([3, 2, 0, 1])[row % 4]]]]
+        n[(n * (inside - p[:, 0])).sum(axis=1) > 0] *= -1.0
+        a = 0.5 * np.linalg.norm(n, axis=1)
+        return n / (2.0 * a)[:, None], a
 
     def areas(self, tris):
         import numpy as np
@@ -409,7 +639,7 @@ def _ids(f, ids, per=16):
         f.write(", ".join(str(x) for x in ids[i:i + per]) + "\n")
 
 
-def _resolve(model, case, mats, kind, size):
+def _resolve(model, case, mats, kind, size, margin):
     """Supports, loads and bonded pairs as solid faces, checked before anything is meshed."""
     fixed_faces, fixed_labels, fixed_parts = [], [], set()
     for ref in case.get("fixed") or []:
@@ -417,44 +647,73 @@ def _resolve(model, case, mats, kind, size):
         fixed_faces += [j for j in faces if j not in fixed_faces]
         fixed_parts.add(k)
         fixed_labels.append("%s (%d face%s)" % (label, len(faces), "" if len(faces) == 1 else "s"))
-    applied, load_lines, loads = Vector(), [], []
+    applied, load_lines, loads, notes = Vector(), [], [], []
+    scale = 0.0                          # the size of the loads (N): what a balance error is measured against
+
+    def force_of(ld, key, k, label):
+        """(magnitude, unit direction) of a force given as N + direction or as a vector."""
+        fv = ld[key]
+        if isinstance(fv, (list, tuple)):
+            vec = Vector(*[float(c) for c in fv])
+            if vec.Length < 1e-12:
+                raise FeaError("load %d: %s vector is zero" % (k + 1, key))
+            d = Vector(vec)
+            d.normalize()
+            return vec.Length, d
+        if "direction" not in ld:
+            raise FeaError("load %d on %s: give direction (e.g. \"-Z\" or [0, 0, -1]) with a %s "
+                           "magnitude, or %s as a vector [fx, fy, fz] in N" % (k + 1, label, key, key))
+        return float(fv), _direction(ld["direction"])
     if kind != "frequency":
         for k, ld in enumerate(case.get("loads") or []):
             if not isinstance(ld, dict) or "ref" not in ld:
-                raise FeaError("each load is {\"ref\": face/hole, \"force\": N, \"direction\": \"-Z\"} or "
+                raise FeaError("each load is {\"ref\": face/hole, \"force\": N, \"direction\": \"-Z\"}, "
+                               "{\"ref\": hole, \"bearing\": N, \"direction\": \"+X\"} or "
                                "{\"ref\": …, \"pressure\": MPa} — got %s" % json.dumps(ld))
             _, faces, label = model.faces(ld["ref"])
             if set(faces) & set(fixed_faces):
                 raise FeaError("%s is also a support — a load on a fixed face does nothing" % ld["ref"])
-            if "force" in ld:
-                fv = ld["force"]
-                if isinstance(fv, (list, tuple)):
-                    vec = Vector(*[float(c) for c in fv])
-                    mag = vec.Length
-                    if mag < 1e-12:
-                        raise FeaError("load %d: force vector is zero" % (k + 1))
-                    d = Vector(vec)
-                    d.normalize()
-                else:
-                    mag = float(fv)
-                    if "direction" not in ld:
-                        raise FeaError("load %d on %s: give direction (e.g. \"-Z\" or [0, 0, -1]) with a force "
-                                       "magnitude, or force as a vector [fx, fy, fz] in N" % (k + 1, label))
-                    d = _direction(ld["direction"])
+            if "bearing" in ld:
+                mag, d = force_of(ld, "bearing", k, label)
+                _, faces, label, diams = model.cylinders(ld["ref"], ld.get("d"))
+                across = abs(d.dot(model.axis(ld["ref"])))
+                if across > 0.05:
+                    raise FeaError("load %d on %s: a bearing load presses across the hole, but this direction is "
+                                   "%.0f° off that (the axis is along %s): give a direction square to the axis, or "
+                                   "use force for a load along it" % (
+                                       k + 1, label, math.degrees(math.asin(min(1.0, across))),
+                                       an._axis_name(model.axis(ld["ref"]))))
+                loads.append({"faces": faces, "bearing": (d.x * mag, d.y * mag, d.z * mag), "label": label})
+                applied += d * mag
+                scale += mag
+                load_lines.append("bearing load %s N along (%s) on %s (pressing on the %s wall, on the side it "
+                                  "pushes against)" % (an.fmt(mag, 3), an._pt(d, 3), label,
+                                                       " and ".join("Ø%s" % an._g(x) for x in diams)))
+            elif "force" in ld:
+                mag, d = force_of(ld, "force", k, label)
                 loads.append({"faces": faces, "force": (d.x * mag, d.y * mag, d.z * mag)})
                 applied += d * mag
+                scale += mag
                 load_lines.append("force %s N along (%s) on %s" % (an.fmt(mag, 3), an._pt(d, 3), label))
+                ax = model.axis(ld["ref"])
+                if ax is not None and abs(d.dot(ax)) < 0.95:
+                    notes.append("the force on %s is spread over the whole wall, so it also pulls on the far side, "
+                                 "which a pin, screw or shaft cannot do: the stress around it comes out too low. "
+                                 "For a load that presses on the wall write \"bearing\" in place of \"force\""
+                                 % label)
             elif "pressure" in ld:
                 p = float(ld["pressure"])
                 loads.append({"faces": faces, "pressure": p})
                 applied += _area_normal(model, faces) * (-p)
+                scale += abs(p) * sum(model.compound.Faces[j].Area for j in faces)
                 load_lines.append("pressure %s MPa on %s (pushing on the face)" % (an.fmt(p, 4), label))
             else:
-                raise FeaError("load %d on %s needs force (N) or pressure (MPa)" % (k + 1, label))
+                raise FeaError("load %d on %s needs force (N), bearing (N) or pressure (MPa)" % (k + 1, label))
     grav = bool(case.get("gravity")) and kind != "frequency"
     if grav:
         w = sum(s.Volume * float(mats[k]["density"]) * 1e-6 * 9.81 for k, s in enumerate(model.shapes))
         applied += Vector(0, 0, -w)
+        scale += w
         load_lines.append("self weight %s N (-Z)" % an.fmt(w, 3))
     bonds, links = [], []
     for pair in case.get("bonded") or []:
@@ -490,7 +749,8 @@ def _resolve(model, case, mats, kind, size):
         raise FeaError("%s %s neither supported nor bonded to a supported part — add fixed=[…] on it or a bonded "
                        "pair that joins it to one" % (", ".join(free), "is" if len(free) == 1 else "are"))
     return {"fixed_faces": fixed_faces, "fixed_labels": fixed_labels, "loads": loads, "gravity": grav,
-            "bonds": bonds, "applied": applied, "load_lines": load_lines}
+            "bonds": bonds, "applied": applied, "load_scale": scale, "load_lines": load_lines, "notes": notes,
+            "fixed_points": _sample_faces([model.compound.Faces[j] for j in fixed_faces], margin / 6.0)}
 
 
 def _sets(model, mesh, plan):
@@ -498,10 +758,34 @@ def _sets(model, mesh, plan):
     import numpy as np
     fixed = mesh.face_nodes(plan["fixed_faces"])
     cload = np.zeros((mesh.nodes, 3))
-    dload = []
+    dload, bearing = [], []
     for ld in plan["loads"]:
         tris = mesh.face_tris(ld["faces"])
-        if "force" in ld:
+        if "bearing" in ld:
+            # a pin, screw or shaft only pushes: a pressure on the side of the wall the load presses on, in
+            # proportion to the cosine of the angle between the push and the wall's inward normal
+            force = np.array(ld["bearing"], dtype=float)
+            mag = float(np.linalg.norm(force))
+            d = force / mag
+            n, a = mesh.outward(tris)
+            w = np.clip(-(n @ d), 0.0, None)
+            f = -n * (w * a)[:, None]                             # each triangle's push per unit of peak pressure
+            along = float(f.sum(axis=0) @ d)
+            off = float(np.linalg.norm(f.sum(axis=0) - along * d)) / max(along, 1e-30)
+            if along <= 1e-12 or off > 0.05:
+                raise FeaError("bearing load on %s: %s" % (ld["label"], (
+                    "no part of the wall faces the load" if along <= 1e-12 else
+                    "the wall is not the same on both sides of the load direction (the push it can give is %.0f° "
+                    "off it): turn the direction, or use force" % math.degrees(math.atan(off)))))
+            f *= mag / along
+            pressed = w > 0
+            # the remainder of an uneven mesh goes back in evenly: the resultant is the force exactly
+            f[pressed] -= np.outer(a[pressed] / a[pressed].sum(), f.sum(axis=0) - force)
+            for c in (3, 4, 5):
+                np.add.at(cload, mesh.pos[tris[:, c]], f / 3.0)
+            bearing.append({"on": ld["label"], "force": mag, "peak_pressure": mag / along * float(w.max()),
+                            "area": float(a[pressed].sum())})
+        elif "force" in ld:
             # a uniform traction: each quadratic triangle's share goes to its three mid-side nodes
             a = mesh.areas(tris)
             share = a / a.sum() / 3.0
@@ -521,7 +805,7 @@ def _sets(model, mesh, plan):
                      "tol": b["gap"] + max(0.01, 0.1 * mesh.size)})
         tie_lines.append([b["refs"][0], b["refs"][1], model.labels[ks], model.labels[km], len(slave)])
     return {"fixed": fixed, "cload": cload, "dload": dload, "gravity": plan["gravity"], "ties": ties,
-            "tie_lines": tie_lines}
+            "tie_lines": tie_lines, "bearing": bearing}
 
 
 def _write_inp(path, model, mesh, mats, kind, modes, st):
@@ -588,6 +872,57 @@ def _ccx_binary():
             return w
     raise FeaError("CalculiX (ccx) not found — it ships with FreeCAD (bin/ccx); set its path in FreeCAD's FEM "
                    "preferences if you moved it")
+
+
+def _gmsh_binary():
+    """The gmsh FreeCAD's mesher runs: its FEM preference, else gmsh on PATH or beside FreeCAD."""
+    pref = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Gmsh").GetString("gmshBinaryPath", "")
+    for c in ([pref] if pref else []) + ["gmsh", "/Applications/Gmsh.app/Contents/MacOS/gmsh",
+                                         os.path.join(App.getHomePath(), "bin", "gmsh")]:
+        w = shutil.which(c)
+        if w:
+            return w
+    return None
+
+
+def _says(cmd, pattern):
+    """What a program prints for its version (the first group of pattern), or None."""
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(pattern, p.stdout.decode("utf-8", "replace"))
+    return m.group(1) if m else None
+
+
+_VERSIONS = None
+
+
+def versions():
+    """{calculix, gmsh, freecad}: the versions of the programs behind a result (None for one that
+    does not say)."""
+    global _VERSIONS
+    if _VERSIONS is None:
+        try:
+            ccx = _says([_ccx_binary(), "-v"], r"Version\s+([\w.]+)")
+        except FeaError:
+            ccx = None
+        gmsh = _gmsh_binary()
+        _VERSIONS = {"calculix": ccx, "gmsh": _says([gmsh, "--version"], r"(\d+\.\d+(?:\.\d+)*)") if gmsh else None,
+                     "freecad": ".".join(str(x) for x in App.Version()[:3])}
+    return dict(_VERSIONS)
+
+
+def outdated(res):
+    """Why a stored result no longer counts although its model and case are unchanged: another
+    version of the method, of CalculiX or of gmsh produced it. None while it is current."""
+    if res.get("method") != METHOD:
+        return "it comes from analysis method %s, now %s" % (res.get("method") or 1, METHOD)
+    now, then = versions(), res.get("versions") or {}
+    for k, name in (("calculix", "CalculiX"), ("gmsh", "gmsh")):
+        if now.get(k) and then.get(k) and now[k] != then[k]:
+            return "it was solved with %s %s, now %s" % (name, then[k], now[k])
+    return None
 
 
 def threads():
@@ -687,6 +1022,16 @@ def _von_mises(s):
     return np.sqrt(0.5 * ((xx - yy) ** 2 + (yy - zz) ** 2 + (zz - xx) ** 2) + 3.0 * (xy ** 2 + yz ** 2 + zx ** 2))
 
 
+def _principal(s):
+    """(largest, smallest) principal stress at each node, from the six stress components."""
+    import numpy as np
+    t = np.empty((len(s), 3, 3))
+    for (i, j), c in (((0, 0), 0), ((1, 1), 1), ((2, 2), 2), ((0, 1), 3), ((1, 2), 4), ((0, 2), 5)):
+        t[:, i, j] = t[:, j, i] = s[:, c]
+    w = np.linalg.eigvalsh(t)                       # ascending
+    return w[:, 2], w[:, 0]
+
+
 def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
     import numpy as np
     t0 = time.time()
@@ -714,13 +1059,17 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
             if os.path.isfile(os.path.join(workdir, fn)):
                 sta += open(os.path.join(workdir, fn), errors="replace").read()[-400:]
         text = log + sta
-        hint = ("the part can still move or rotate — add supports so it is held in every direction"
+        hint = ("the mesh has elements folded over at a curved face (nonpositive Jacobian): pass another mesh_size"
+                if re.search(r"nonpositive jacobian", text, re.I) else
+                "the part can still move or rotate — add supports so it is held in every direction"
                 if re.search(r"zero pivot|singular|not converge|nonpositive|no convergence", text, re.I)
                 else "see the CalculiX output below")
         raise FeaError("CalculiX produced no result: %s\n%s" % (hint, "\n".join(errors[:6]) or log.strip()[-600:]))
-    s = {"size": size, "nodes": mesh.nodes, "elements": mesh.elements, "xyz": mesh.xyz, "surface": mesh.surface,
-         "npart": mesh.npart, "applied": plan["applied"], "fixed": plan["fixed_labels"], "loads": plan["load_lines"],
-         "fixed_boxes": [model.compound.Faces[j].BoundBox for j in plan["fixed_faces"]],
+    s = {"size": size, "nodes": mesh.nodes, "elements": mesh.elements, "quality": mesh.quality,
+         "xyz": mesh.xyz, "surface": mesh.surface,
+         "npart": mesh.npart, "applied": plan["applied"], "load_scale": plan["load_scale"],
+         "fixed": plan["fixed_labels"], "loads": plan["load_lines"], "bearing": st["bearing"],
+         "fixed_points": plan["fixed_points"],
          "ccx_seconds": round(t_ccx, 2), "mesh_seconds": round(t_mesh, 2),
          "warnings": [ln.strip() for ln in out_lines if "*WARNING" in ln and "gentiedmpc" not in ln]}
     # a follower node with no face of the other part within the tolerance stays untied (ccx warns per node)
@@ -737,7 +1086,9 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
         disp = [b for b in blocks if b[0] == "DISP"][-1]
         s["U"] = field(disp[2], disp[3][:, :3], 3)
         stress = [b for b in blocks if b[0] == "STRESS"]
-        s["vm"] = _von_mises(field(stress[-1][2], stress[-1][3][:, :6], 6)) if stress else np.zeros(mesh.nodes)
+        sig = field(stress[-1][2], stress[-1][3][:, :6], 6) if stress else np.zeros((mesh.nodes, 6))
+        s["vm"] = _von_mises(sig)
+        s["p1"], s["p3"] = _principal(sig)
         s["reaction"] = _reactions(dat)
     else:
         shapes = [field(b[2], b[3][:, :3], 3) for b in blocks if b[0] == "DISP"]
@@ -763,43 +1114,55 @@ def _solve(model, plan, mats, size, workdir, kind, modes, deadline=None):
 # ------------------------------------------------------------------ summaries
 
 def _summary(s, model, mats, margin):
-    """Static: largest stress (also away from the supports), displacement, safety factor — overall
-    and per part."""
+    """Static: the stress each part is judged on, overall and away from the supports; the largest
+    tension and compression; displacement; safety factor — overall and per part. A ductile part
+    is judged on its von Mises stress (yielding). A brittle one breaks on its largest principal
+    stress, so it is judged on that by size: tension, or compression against the same strength,
+    which is on the safe side."""
     import numpy as np
-    xyz, vm = s["xyz"], s["vm"]
+    xyz, vm, p1, p3 = s["xyz"], s["vm"], s["p1"], s["p3"]
     dl = np.linalg.norm(s["U"], axis=1)
-    near = np.zeros(len(vm), dtype=bool)
-    for bb in s["fixed_boxes"]:
-        near |= ((xyz[:, 0] >= bb.XMin - margin) & (xyz[:, 0] <= bb.XMax + margin) &
-                 (xyz[:, 1] >= bb.YMin - margin) & (xyz[:, 1] <= bb.YMax + margin) &
-                 (xyz[:, 2] >= bb.ZMin - margin) & (xyz[:, 2] <= bb.ZMax + margin))
+    near = _within(xyz, s["fixed_points"], margin)       # by distance to the fixed faces themselves
+    brittle = np.array([bool(m.get("brittle")) for m in mats])
+    judged = np.where(brittle[np.maximum(s["npart"], 0)], np.maximum(np.abs(p1), np.abs(p3)), vm)
+    s["judged"] = judged
 
-    def peak(mask, vals):
+    def peak(mask, vals, low=False):
         if not mask.any():
             return None, None
-        i = int(np.flatnonzero(mask)[np.argmax(vals[mask])])
+        idx = np.flatnonzero(mask)
+        i = int(idx[np.argmin(vals[mask]) if low else np.argmax(vals[mask])])
         return float(vals[i]), [float(c) for c in xyz[i]]
     per = []
     for k, lb in enumerate(model.labels):
         mk = s["npart"] == k
-        v, at = peak(mk, vm)
-        va, aat = peak(mk & ~near, vm)
+        v, at = peak(mk, judged)
+        va, aat = peak(mk & ~near, judged)
         d, dat = peak(mk, dl)
         y = float(mats[k]["yield"])
-        per.append({"part": lb, "max_vm": v, "max_vm_at": at, "max_vm_away": va, "max_vm_away_at": aat,
+        per.append({"part": lb, "criterion": "principal" if brittle[k] else "von Mises",
+                    "max_stress": v, "max_stress_at": at, "max_stress_away": va, "max_stress_away_at": aat,
+                    "max_vm": peak(mk, vm)[0], "max_vm_away": peak(mk & ~near, vm)[0],
                     "max_disp": d, "max_disp_at": dat, "yield": y,
                     "safety_factor": (y / v) if v and v > 1e-12 else None,
                     "safety_factor_away": (y / va) if va and va > 1e-12 else None})
     allm = np.ones(len(vm), dtype=bool)
-    v, at = peak(allm, vm)
-    va, aat = peak(~near, vm)
+    v, at = peak(allm, judged)
+    va, aat = peak(~near, judged)
+    w, wat = peak(allm, vm)
+    wa, waat = peak(~near, vm)
+    t, tat = peak(allm, p1)
+    c, cat = peak(allm, p3, low=True)
     i = int(np.argmax(dl))
     sfs = [p["safety_factor"] for p in per if p["safety_factor"] is not None]
-    out = {"max_vm": v, "max_vm_at": at, "max_vm_away": va, "max_vm_away_at": aat,
+    out = {"criterion": "principal" if brittle.all() else "von Mises" if not brittle.any() else "per part",
+           "max_stress": v, "max_stress_at": at, "max_stress_away": va, "max_stress_away_at": aat,
+           "max_vm": w, "max_vm_at": wat, "max_vm_away": wa, "max_vm_away_at": waat,
+           "max_principal": t, "max_principal_at": tat, "min_principal": c, "min_principal_at": cat,
            "max_disp": float(dl[i]), "max_disp_at": [float(c) for c in xyz[i]],
            "max_disp_vec": [float(c) for c in s["U"][i]],
            "safety_factor": min(sfs) if sfs else None,
-           "nodes": s["nodes"], "elements": s["elements"], "size": s["size"]}
+           "nodes": s["nodes"], "elements": s["elements"], "size": s["size"], "mesh_quality": s["quality"]}
     if len(per) > 1:
         out["per_part"] = per
     return out
@@ -809,7 +1172,7 @@ def _mode_summary(s, kind):
     """Frequency / buckling: the values, and where and which way the first relevant mode moves."""
     import numpy as np
     vals = s["values"]
-    out = {"nodes": s["nodes"], "elements": s["elements"], "size": s["size"]}
+    out = {"nodes": s["nodes"], "elements": s["elements"], "size": s["size"], "mesh_quality": s["quality"]}
     if kind == "frequency":
         out["frequencies_hz"] = vals
         pick = 0
@@ -840,8 +1203,10 @@ def _axis_words(d):
 
 def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadline=None):
     """Solve a case → (result dict, png path or None). parts: the part objects; mats: {label:
-    material}; refine: True solves again on a finer mesh, False never, None when the first mesh
-    is small enough (AUTO_REFINE nodes); deadline: time.time() by which CalculiX must be done."""
+    material}. A second mesh shows whether the result has converged. refine None: a finer one
+    while the first is small enough (AUTO_REFINE nodes; the finer one is then the result), else a
+    coarser one; True: the finer one; False: no second mesh. deadline: time.time() by which
+    CalculiX must be done."""
     t0 = time.time()
     if not isinstance(parts, (list, tuple)):
         parts = [parts]
@@ -858,47 +1223,75 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
                            "or parts.%s.density_g_cm3, or give material={…, \"density\": g/cm³}" % (
                                "a frequency analysis" if kind == "frequency" else "self weight", miss[0], miss[0]))
     notes = []
-    size, note, wall = default_size(model.shapes)
+    size, note, wall, base = default_size(model.shapes)
     if mesh_size:
         size = float(mesh_size)
     elif note:
         notes.append(note)
     work = os.path.join(out_dir, "ccx")
-    margin = 2.0 * size              # "away from the supports" zone, fixed by the first mesh
+    margin = support_margin(case, base)
     summ = (lambda s: _summary(s, model, mlist, margin)) if kind == "static" else (lambda s: _mode_summary(s, kind))
-    plan = _resolve(model, case, mlist, kind, size)
+    plan = _resolve(model, case, mlist, kind, size, margin)
+    notes += plan["notes"]
     s1 = _solve(model, plan, mlist, size, work, kind, modes, deadline)
     r1 = summ(s1)
-    final, s_final, r2 = r1, s1, None
-    est = s1["elements"] * REFINE ** 3
-    if refine is None and s1["nodes"] > AUTO_REFINE:
-        notes.append("refined solve skipped: %s nodes — pass refine=true to force (convergence not shown; %s)" % (
-            _int(s1["nodes"]), "the thinnest wall, %s mm, has 2 or more elements through it" % an.fmt(wall, 2)
-            if wall and size <= 0.51 * wall else "the mesh is large" if not wall else
-            "the %s mm wall gets fewer than 2 elements through it — pass a smaller mesh_size" % an.fmt(wall, 2)))
-    elif refine is not False and est > HARD_MAX:
-        notes.append("refined solve skipped: it would have ≈%s elements — more than CalculiX solves in reasonable "
-                     "memory and time (≈9 GB for 320 000 nodes); pass mesh_size to choose the mesh" % _int(est))
-    elif refine is not False:
+    final, s_final, coarse, fine, extra = r1, s1, None, None, 0.0     # coarse, fine: the two meshes' summaries
+    if mesh_size and wall and size > 0.51 * wall:
+        notes.append("the %s mm wall gets fewer than 2 elements through it at this mesh size: stress and deflection "
+                     "there are less accurate, so pass a smaller mesh_size" % an.fmt(wall, 2))
+    if refine is False:
+        notes.append("solved on one mesh only (refine=false), so convergence is not shown: a fea_* check on this "
+                     "result fails unless it sets accept_unconverged")
+    else:
+        est = s1["elements"] * REFINE ** 3
+        finer = (refine is True or s1["nodes"] <= AUTO_REFINE) and est <= HARD_MAX
+        other = round(size / REFINE if finer else size * REFINE, 3)
+        side = work if finer else work + "_coarse"
         try:
-            s2 = _solve(model, plan, mlist, round(size / REFINE, 3), work, kind, modes, deadline)
-            r2 = summ(s2)
-            final, s_final = r2, s2
+            s2 = _solve(model, plan, mlist, other, side, kind, modes, deadline)
+            extra = s2["ccx_seconds"]
+            if finer:
+                coarse, fine = r1, summ(s2)
+                final, s_final = fine, s2
+            else:
+                coarse, fine = summ(s2), r1
+                notes.append("convergence is shown against a coarser mesh (%s mm, %s nodes): %s" % (
+                    an.fmt(other, 2), _int(s2["nodes"]),
+                    "a finer one would have ≈%s elements, more than CalculiX solves in reasonable memory and time "
+                    "(≈9 GB for 320 000 nodes)" % _int(est) if est > HARD_MAX else
+                    "a finer one than these %s nodes takes minutes, and refine=true solves it" % _int(s1["nodes"])))
         except CcxTimeout:
-            notes.append("refined solve stopped: it did not finish in the time left — the result is from the first "
-                         "mesh (%s nodes); pass a longer timeout to see convergence" % _int(s1["nodes"]))
+            notes.append("the second solve (at %s mm) did not finish in the time left, so convergence is not shown: "
+                         "pass a longer timeout" % an.fmt(other, 2))
+        except FeaError as e:
+            notes.append("the second solve (at %s mm) failed, so convergence is not shown: %s" % (
+                an.fmt(other, 2), (str(e).splitlines() or [""])[0][:300]))
+        finally:
+            if not finer:
+                shutil.rmtree(side, ignore_errors=True)
     res = dict(final)
-    res.update(analysis=kind, material={k: mlist[0].get(k) for k in ("name", "E", "nu", "yield", "density", "source",
-                                                                       "note")},
-               fixed=s1["fixed"], loads=s1["loads"], applied=list(s1["applied"]), coarse=r1 if r2 else None,
-               notes=notes, ccx_seconds=round(s1["ccx_seconds"] + (s_final["ccx_seconds"] if r2 else 0.0), 2),
-               threads=threads())
+    res.update(analysis=kind, material={k: mlist[0].get(k) for k in MAT_KEYS},
+               fixed=s1["fixed"], loads=s1["loads"], applied=list(s1["applied"]), coarse=coarse,
+               notes=notes, ccx_seconds=round(s1["ccx_seconds"] + extra, 2),
+               threads=threads(), method=METHOD, versions=versions())
+    if kind == "static":
+        res["support_margin"] = round(margin, 3)
+    if s_final["bearing"]:
+        res["bearing"] = s_final["bearing"]
     if len(model.parts) == 1:
         res["part"] = model.labels[0]
     else:
         res["parts"] = model.labels
-        res["materials"] = {lb: {k: m.get(k) for k in ("name", "E", "nu", "yield", "density", "source", "note")}
-                            for lb, m in zip(model.labels, mlist)}
+        res["materials"] = {lb: {k: m.get(k) for k in MAT_KEYS} for lb, m in zip(model.labels, mlist)}
+    q = s_final["quality"]
+    if q["straightened"]:
+        res["notes"].append("%d element%s folded over at a curved face and got straight edges: the surface is "
+                            "faceted there" % (q["straightened"], "" if q["straightened"] == 1 else "s"))
+    if q["distorted"]:
+        res["notes"].append("%d element%s badly distorted at curved faces (scaled Jacobian down to %s, 1 is "
+                            "undistorted): the stress next to them is less accurate, and a smaller mesh_size helps"
+                            % (q["distorted"], " is" if q["distorted"] == 1 else "s are",
+                               an.fmt(q["min_jacobian"], 2)))
     if s_final["ties"]:
         res["bonded"] = [{"a": a, "b": b, "follower": sl, "leader": ml, "tied_nodes": n - u, "untied_nodes": u}
                          for a, b, sl, ml, n, u in s_final["ties"]]
@@ -909,9 +1302,9 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
                                     "the pair)" % (b["a"], b["b"], _int(b["untied_nodes"]), b["follower"],
                                                    b["leader"]))
     if kind == "static":
-        _finish_static(res, s_final, r1, r2, mlist, model)
+        _finish_static(res, s_final, coarse, fine, mlist, model)
     else:
-        _finish_modes(res, r1, r2, kind, modes, case)
+        _finish_modes(res, coarse, fine, kind, modes, case)
     if s_final["warnings"]:
         res["ccx_warnings"] = s_final["warnings"][:20]
     for m, lb in zip(mlist, model.labels):
@@ -932,22 +1325,26 @@ def run_case(doc, parts, case, mats, out_dir, refine=None, mesh_size=None, deadl
 
 
 def _finish_static(res, s_final, r1, r2, mlist, model):
+    """r1, r2: the summaries of the coarser and the finer mesh, or None when one mesh was solved."""
     applied, reaction = s_final["applied"], s_final["reaction"]
+    # measured against the size of the loads, not their resultant: loads that balance each other
+    # (pressure inside a bore, two opposing forces) have no resultant to compare with
+    scale = max(s_final["load_scale"], applied.Length)
     bal = None
-    if reaction is not None and applied.Length > 1e-9:
-        bal = (Vector(*reaction) + applied).Length / applied.Length
-    res.update(reaction=reaction, balance_error=bal)
+    if reaction is not None and scale > 1e-9:
+        bal = (Vector(*reaction) + applied).Length / scale
+    res.update(reaction=reaction, balance_error=bal, load_scale=scale)
     if len(model.parts) > 1:
         gov = min(res["per_part"], key=lambda p: p["safety_factor"] if p["safety_factor"] is not None else 1e99)
         res["governing_part"] = gov["part"]
         k = model.labels.index(gov["part"])
-        res["material"] = {kk: mlist[k].get(kk) for kk in ("name", "E", "nu", "yield", "density", "source", "note")}
+        res["material"] = {kk: mlist[k].get(kk) for kk in MAT_KEYS}
     if r2:
         dd = abs(r2["max_disp"] - r1["max_disp"]) / max(r2["max_disp"], 1e-12)
-        ds = abs(r2["max_vm"] - r1["max_vm"]) / max(r2["max_vm"], 1e-12)
-        da = (abs(r2["max_vm_away"] - r1["max_vm_away"]) / max(r2["max_vm_away"], 1e-12)
-              if r1.get("max_vm_away") and r2.get("max_vm_away") else None)
-        res["change"] = {"disp": dd, "vm": ds, "vm_away": da}
+        ds = abs(r2["max_stress"] - r1["max_stress"]) / max(r2["max_stress"], 1e-12)
+        da = (abs(r2["max_stress_away"] - r1["max_stress_away"]) / max(r2["max_stress_away"], 1e-12)
+              if r1.get("max_stress_away") and r2.get("max_stress_away") else None)
+        res["change"] = {"disp": dd, "stress": ds, "stress_away": da}
         # per quantity: a displacement can converge while a peak stress at a singularity never does
         res["converged_disp"] = dd < 0.03
         res["converged_stress"] = ds < 0.10
@@ -957,18 +1354,43 @@ def _finish_static(res, s_final, r1, r2, mlist, model):
             res["notes"].append("the peak stress still changes %.0f %% with a finer mesh — a stress singularity "
                                 "(sharp internal corner, edge of a rigid support or a point-like load): judge the "
                                 "stress away from it, or add a fillet" % (100 * ds))
-    if res.get("max_vm_away") and res["max_vm"] > 1.3 * res["max_vm_away"]:
+    if res.get("max_stress_away") and res["max_stress"] > 1.3 * res["max_stress_away"]:
         res["notes"].append("the peak is at a support: a rigid fixture inflates the stress at its edge; away from "
-                            "the supports the peak is %s MPa" % an.fmt(res["max_vm_away"], 3))
+                            "the supports the peak is %s MPa" % an.fmt(res["max_stress_away"], 3))
+    # A linear analysis holds for stresses below the strength and for small deflections. Outside that the
+    # numbers are not physical, and a check on them would pass on nothing.
+    over = []
+    for p in res.get("per_part") or [dict(res, part=res.get("part"), **{"yield": mlist[0]["yield"]})]:
+        stress = p.get("max_stress_away") if p.get("max_stress_away") is not None else p.get("max_stress")
+        if stress and stress > p["yield"]:
+            over.append("%s %s (%s MPa away from the supports, against %s %s MPa)" % (
+                p["part"], "breaks" if p.get("criterion") == "principal" else "yields", an.fmt(stress, 3),
+                _strength(p.get("criterion")), an.fmt(p["yield"], 0)))
+    res["beyond_yield"] = bool(over)
+    if over:
+        res["notes"].append("%s: past that the material no longer follows this linear analysis, so the stresses "
+                            "are not real and the deflection is larger than shown" % "; ".join(over))
+    bb = model.compound.BoundBox
+    span = max(bb.XLength, bb.YLength, bb.ZLength)
+    res["large_deflection"] = bool(res["max_disp"] > LARGE_DEFLECTION * span)
+    if res["large_deflection"]:
+        res["notes"].append("the largest displacement, %s mm, is %.0f %% of the longest dimension (%s mm): beyond "
+                            "small deflections a linear analysis is approximate, and too favourable where the part "
+                            "is in compression (check buckling)" % (
+                                an.fmt(res["max_disp"], 3), 100 * res["max_disp"] / span, an.fmt(span, 1)))
 
 
 def _finish_modes(res, r1, r2, kind, modes, case):
+    """r1, r2: the summaries of the coarser and the finer mesh, or None when one mesh was solved."""
     res["modes"] = modes
     if kind == "frequency":
         f = res["frequencies_hz"]
         if case.get("loads") or case.get("gravity"):
             res["notes"].append("loads are not used by a frequency analysis (natural frequencies depend on the "
                                 "supports, stiffness and mass only)")
+        res["notes"].append("these are upper bounds: only the part's own mass is in the analysis and its supports "
+                            "are rigid. What it carries (a motor, a load) and real fixings both lower the "
+                            "frequencies")
         if len(f) > 1 and f[0] > 0.5 and abs(f[1] - f[0]) < 0.005 * f[0]:
             res["notes"].append("modes 1 and 2 are a pair at the same frequency: the part is equally stiff in two "
                                 "directions, so either shape (or a mix) can occur")
@@ -996,6 +1418,8 @@ def _finish_modes(res, r1, r2, kind, modes, case):
             ch = abs(lam - r1["buckling_factor"]) / max(abs(lam), 1e-12)
             res["change"] = {"factor": ch}
             res["converged"] = res["converged_buckling"] = ch < 0.03
+        elif r2:        # the two meshes must agree on whether the loads buckle the part at all
+            res["converged"] = res["converged_buckling"] = lam is None and r1.get("buckling_factor") is None
         res["notes"].append("linear (eigenvalue) buckling assumes a perfect part: real parts buckle earlier "
                             "(imperfections, eccentric loads) — keep a margin of 3 or more on the factor")
 
@@ -1010,8 +1434,9 @@ def report_lines(res, case_name):
         who, case_name, TITLES[kind], res.get("rev", ""), res.get("time", 0))]
     mats = res.get("materials") or {who: res["material"]}
     for lb, m in mats.items():
-        lines.append("material  %s%s: E %.0f MPa, ν %s, yield %.0f MPa%s (%s)" % (
-            "%s " % lb if len(mats) > 1 else "", m["name"], m["E"], f(m["nu"], 3), m["yield"],
+        lines.append("material  %s%s: E %.0f MPa, ν %s, %s %.0f MPa%s (%s)" % (
+            "%s " % lb if len(mats) > 1 else "", m["name"], m["E"], f(m["nu"], 3),
+            "brittle, breaking stress" if m.get("brittle") else "yield", m["yield"],
             ", density %s g/cm³" % f(m["density"], 2) if kind == "frequency" and m.get("density") else "",
             m["source"]))
     for b in res.get("bonded") or []:
@@ -1022,10 +1447,15 @@ def report_lines(res, case_name):
     if kind != "frequency":
         for ld in res["loads"]:
             lines.append("load      %s" % ld)
+        for b in res.get("bearing") or []:
+            lines.append("          %s: peak contact pressure %s MPa, pressing on %s mm² of the wall" % (
+                b["on"], f(b["peak_pressure"], 3), f(b["area"], 1)))
     mesh = "mesh      tet10, %s nodes, %s elements at %s mm" % (_int(res["nodes"]), _int(res["elements"]),
                                                                f(res["size"], 2))
     if res.get("coarse"):
         mesh += " (also solved at %s mm: %s nodes)" % (f(res["coarse"]["size"], 2), _int(res["coarse"]["nodes"]))
+    if res.get("mesh_quality"):
+        mesh += " · scaled Jacobian ≥ %s" % f(res["mesh_quality"]["min_jacobian"], 2)
     lines.append(mesh)
     if kind == "static":
         _report_static(lines, res)
@@ -1050,43 +1480,73 @@ def report_lines(res, case_name):
         if res.get("change"):
             lines.append("converge  finer mesh changes the factor %.1f %% %s" % (
                 100 * res["change"]["factor"], "✓" if res.get("converged") else "✗ (see notes)"))
+    v = res.get("versions") or {}
+    lines.append("solver    %s (analysis method %s)" % (", ".join(
+        "%s %s" % (name, v[k]) for k, name in (("calculix", "CalculiX"), ("gmsh", "gmsh"), ("freecad", "FreeCAD"))
+        if v.get(k)) or "CalculiX", res.get("method", 1)))
     for n in res.get("notes") or []:
         lines.append("note      %s" % n)
     return lines
 
 
+def _judged(criterion):
+    return "max principal stress" if criterion == "principal" else "max von Mises"
+
+
+def _strength(criterion):
+    return "the breaking stress" if criterion == "principal" else "yield"
+
+
 def _report_static(lines, res):
     f = an.fmt
     m = res["material"]
+    margin = f(res.get("support_margin", 0), 2)
     if res.get("reaction") is not None:
         ok = res.get("balance_error") is not None and res["balance_error"] < 0.01
         lines.append("reaction  supports carry (%s) N vs applied (%s) N  %s" % (
             an._pt(Vector(*res["reaction"]), 2), an._pt(Vector(*res["applied"]), 2),
-            "✓ in equilibrium" if ok else "✗ out of balance by %.1f %% — check the loads and supports"
+            "✓ in equilibrium%s" % (" (the loads balance each other)" if sum(
+                c * c for c in res["applied"]) ** 0.5 < 0.01 * (res.get("load_scale") or 0) else "")
+            if ok else "✗ out of balance by %.1f %% — check the loads and supports"
             % (100 * (res.get("balance_error") or 0))))
     per = res.get("per_part")
     sf = res.get("safety_factor")
     if per:
-        top = max(per, key=lambda p: p["max_vm"] or 0)
-        lines.append("stress    max von Mises %s MPa at (%s) in %s" % (
-            f(res["max_vm"], 3), an._pt(Vector(*res["max_vm_at"]), 2), top["part"]))
+        top = max(per, key=lambda p: p["max_stress"] or 0)
+        lines.append("stress    %s %s MPa at (%s) in %s" % (
+            _judged(top["criterion"]), f(res["max_stress"], 3), an._pt(Vector(*res["max_stress_at"]), 2), top["part"]))
         for p in per:
-            lines.append("part      %s: max von Mises %s MPa → safety factor %s against yield %.0f MPa%s · max "
-                         "displacement %s mm" % (
-                             p["part"], f(p["max_vm"], 3), f(p["safety_factor"], 2), p["yield"],
-                             " (away from the supports %s MPa → %s)" % (f(p["max_vm_away"], 3),
-                                                                        f(p["safety_factor_away"], 2))
-                             if p.get("max_vm_away") is not None and abs(p["max_vm_away"] - p["max_vm"]) > 1e-9
-                             else "", f(p["max_disp"], 4)))
-        lines.append("          → governing: %s, safety factor %s" % (res.get("governing_part"), f(sf, 2)))
+            lines.append("part      %s: %s %s MPa → safety factor %s against %s %.0f MPa%s · max displacement %s "
+                         "mm" % (
+                p["part"], _judged(p["criterion"]), f(p["max_stress"], 3), f(p["safety_factor"], 2),
+                _strength(p["criterion"]), p["yield"],
+                " (away from the supports %s MPa → %s)" % (f(p["max_stress_away"], 3), f(p["safety_factor_away"], 2))
+                if p.get("max_stress_away") is not None and abs(p["max_stress_away"] - p["max_stress"]) > 1e-9
+                else "", f(p["max_disp"], 4)))
+        lines.append("          → governing: %s, safety factor %s%s" % (
+            res.get("governing_part"), f(sf, 2), "  (away from the supports: over %s mm from a support)" % margin
+            if any(p.get("max_stress_away") is not None for p in per) else ""))
     else:
-        lines.append("stress    max von Mises %s MPa at (%s)%s" % (
-            f(res["max_vm"], 3), an._pt(Vector(*res["max_vm_at"]), 2),
-            "  → safety factor %s against yield %.0f MPa" % (f(sf, 2), m["yield"]) if sf else ""))
-        if res.get("max_vm_away") is not None and abs(res["max_vm_away"] - res["max_vm"]) > 1e-9:
-            lines.append("          away from the supports: %s MPa at (%s)  → safety factor %s" % (
-                f(res["max_vm_away"], 3), an._pt(Vector(*res["max_vm_away_at"]), 2),
-                f(m["yield"] / res["max_vm_away"], 2) if res["max_vm_away"] > 1e-12 else "∞"))
+        crit = res.get("criterion")
+        lines.append("stress    %s %s MPa at (%s)%s" % (
+            _judged(crit), f(res["max_stress"], 3), an._pt(Vector(*res["max_stress_at"]), 2),
+            "  → safety factor %s against %s %.0f MPa" % (f(sf, 2), _strength(crit), m["yield"]) if sf else ""))
+        if res.get("max_stress_away") is not None and abs(res["max_stress_away"] - res["max_stress"]) > 1e-9:
+            lines.append("          away from the supports: %s MPa at (%s)  → safety factor %s  (over %s mm from a "
+                         "support)" % (
+                             f(res["max_stress_away"], 3), an._pt(Vector(*res["max_stress_away_at"]), 2),
+                             f(m["yield"] / res["max_stress_away"], 2) if res["max_stress_away"] > 1e-12 else "∞",
+                             margin))
+    if res.get("criterion") != "von Mises":
+        lines.append("          a brittle material breaks on its largest principal stress, so it is judged on that "
+                     "(by size: tension or compression), not on von Mises (%s MPa)" % f(res["max_vm"], 3))
+    t, c = res.get("max_principal"), res.get("min_principal")
+    if t is not None and c is not None:
+        lines.append("principal %s · %s" % (
+            "largest tension %s MPa at (%s)" % (f(t, 3), an._pt(Vector(*res["max_principal_at"]), 2))
+            if t > 1e-9 else "no tension",
+            "largest compression %s MPa at (%s)" % (f(c, 3), an._pt(Vector(*res["min_principal_at"]), 2))
+            if c < -1e-9 else "no compression"))
     lines.append("deflect   max displacement %s mm at (%s), direction (%s)" % (
         f(res["max_disp"], 4), an._pt(Vector(*res["max_disp_at"]), 2), an._pt(Vector(*res["max_disp_vec"]), 4)))
     if res.get("change"):
@@ -1095,9 +1555,10 @@ def _report_static(lines, res):
         def mark(x):
             return "✓" if x else "✗"
         lines.append("converge  finer mesh changes displacement %.1f %% %s · peak stress %.1f %% %s%s%s" % (
-            100 * ch["disp"], mark(res.get("converged_disp")), 100 * ch["vm"], mark(res.get("converged_stress")),
-            " · stress away from supports %.1f %% %s" % (100 * ch["vm_away"], mark(res.get("converged_stress_away")))
-            if ch.get("vm_away") is not None else "",
+            100 * ch["disp"], mark(res.get("converged_disp")), 100 * ch["stress"], mark(res.get("converged_stress")),
+            " · stress away from supports %.1f %% %s" % (100 * ch["stress_away"],
+                                                         mark(res.get("converged_stress_away")))
+            if ch.get("stress_away") is not None else "",
             "  → converged ✓" if res.get("converged") else "  (see notes)"))
 
 
@@ -1157,7 +1618,9 @@ def plot(s, res, png):
     fig = plt.figure(figsize=(12, 5.4), dpi=110)
     cmap = plt.get_cmap("turbo")
     for k, (title, vals, unit, pts, at, peak, nd) in enumerate((
-            ("von Mises stress", s["vm"], "MPa", xyz, res["max_vm_at"], res["max_vm"], 3),
+            ({"von Mises": "von Mises stress", "principal": "largest principal stress"}.get(
+                res.get("criterion"), "judged stress"), s["judged"], "MPa", xyz, res["max_stress_at"],
+             res["max_stress"], 3),
             ("displacement (×%.3g)" % scale, dl, "mm", xyz + scale * U, res["max_disp_at"], res["max_disp"], 4))):
         ax = fig.add_subplot(1, 2, k + 1)
         vmax = float(vals.max()) or 1.0

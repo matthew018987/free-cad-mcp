@@ -1947,7 +1947,8 @@ def t_analyze(args, request_id=None):
     from fea.json, merged with any given arguments, solved after a rebuild."""
     pdir = project_dir(args.get("project"))
     wargs = {k: args.get(k) for k in ("case", "part", "parts", "bonded", "analysis", "modes", "fixed", "loads",
-                                      "gravity", "material", "mesh_size", "refine", "save", "params")}
+                                      "gravity", "material", "mesh_size", "refine", "support_margin", "save",
+                                      "params")}
     wargs["project_dir"] = pdir
     wargs["timeout"] = int(args.get("timeout", 900))      # the worker stops CalculiX in time
     return maybe_background("analyze", args, "analyze", wargs, int(args.get("timeout", 900)), request_id,
@@ -2282,8 +2283,9 @@ def t_release(args, request_id=None):
                 got = "lowest buckling factor %s" % (_g(ad.get("buckling_factor")) if ad.get("buckling_factor")
                                                      else "> %s" % _g(ad.get("buckling_factor_above")))
             else:
-                got = "max von Mises %s MPa, safety factor %s, max displacement %s mm" % (
-                    _g(ad.get("max_vm")), _g(ad.get("safety_factor")), _g(ad.get("max_disp")))
+                got = "max %s %s MPa, safety factor %s, max displacement %s mm" % (
+                    "principal stress" if ad.get("criterion") == "principal" else "von Mises",
+                    _g(ad.get("max_stress")), _g(ad.get("safety_factor")), _g(ad.get("max_disp")))
             fea_lines.append("  FEA      case '%s' re-solved for this model (%.0f s): %s" % (
                 case, ad.get("time") or a.get("elapsed") or 0, got))
         b = run_worker("build", {"project_dir": pdir, "params": {}, "views": [], "force": False}, timeout=600,
@@ -2757,24 +2759,30 @@ TOOLS = [
                                                           "(saves a new revision after the newest)."},
          "return_image": {"type": "boolean"}, "timeout": {"type": "integer"}})},
     {"name": "analyze", "handler": t_analyze, "wants_request_id": True,
-     "description": "FEA of one part, or of several parts bonded together (gmsh tet10 mesh, CalculiX). "
-                    "Rebuilds first, then solves a case: `fixed` — faces/holes that are held (geometry references: "
+     "description": "FEA of one part, or of several parts bonded together (gmsh tet10 mesh, CalculiX). Rebuilds "
+                    "first, then solves a case: `fixed` — faces/holes that are held (geometry references: "
                     "\"Bracket.holes(d=5.5)\" for bolted holes, \"Bracket.face(-Z)\" for a clamped face); `loads` — "
                     "[{\"ref\": face/hole, \"force\": N, \"direction\": \"-Z\" | [x,y,z]}, {\"ref\": …, \"force\": "
-                    "[fx,fy,fz]}, {\"ref\": …, \"pressure\": MPa (pushes on the face)}] (a force is spread over the "
-                    "referenced faces); gravity=true adds self weight. analysis=\"static\" (default): von Mises "
-                    "stress, safety factor against yield, displacement and support reactions; \"frequency\": natural "
-                    "frequencies and mode shapes (loads are not used; needs the material density); \"buckling\": "
-                    "buckling load factors of the given loads. Several parts: parts=[\"Base\", \"Bracket\"] with "
-                    "bonded=[[\"Base.face(+Z)\", \"Bracket.face(-Z)\"], …] — face/hole pairs on two parts that touch "
-                    "and are glued, clamped or pressed together (CalculiX *TIE); supports and loads may be on any of "
-                    "the parts. Material from project.json parts or material={\"E\": MPa, \"nu\": …, \"yield\": MPa, "
-                    "\"density\": g/cm³} / a material name. The case is saved in fea.json under `case` "
-                    "(default 'default') — re-run it by name; checks.json fea_safety / fea_stress / fea_displacement "
-                    "(static), fea_frequency (first natural frequency ≥ min Hz) and fea_buckling (lowest positive "
-                    "buckling factor ≥ min) use the latest result and go stale when the model or case changes (release "
-                    "re-solves stale cases). Limits: linear elastic, small deflections, rigid supports, bonded faces "
-                    "never slide or separate (no contact, no bolt preload).",
+                    "[fx,fy,fz]}, {\"ref\": hole, \"bearing\": N, \"direction\": …} (a pin, screw, shaft or bearing "
+                    "in a hole only pushes, on the side of the wall it presses against; \"d\" picks the diameter of a "
+                    "stepped hole), {\"ref\": …, \"pressure\": MPa (pushes on the face)}] (a force is spread over the "
+                    "referenced faces, so across a hole it also pulls on the far side: use bearing there); "
+                    "gravity=true adds self weight. analysis=\"static\" (default): von Mises and principal stresses, "
+                    "safety factor against yield (a brittle material is judged on its largest principal stress), "
+                    "displacement and support reactions; \"frequency\": natural frequencies and mode shapes (loads "
+                    "are not used; needs the material density; upper bounds, as the mass a part carries is not in the "
+                    "analysis); \"buckling\": buckling load factors of the given loads. Several parts: "
+                    "parts=[\"Base\", \"Bracket\"] with bonded=[[\"Base.face(+Z)\", \"Bracket.face(-Z)\"], …] — "
+                    "face/hole pairs on two parts that touch and are glued, clamped or pressed together (CalculiX "
+                    "*TIE); supports and loads may be on any of the parts. Material from project.json parts or "
+                    "material={\"E\": MPa, \"nu\": …, \"yield\": MPa, \"density\": g/cm³, \"brittle\": true|false} / "
+                    "a material name. The case is saved in fea.json under `case` (default 'default') — re-run it by "
+                    "name; checks.json fea_safety / fea_stress / fea_displacement (static), fea_frequency (first "
+                    "natural frequency ≥ min Hz) and fea_buckling (lowest positive buckling factor ≥ min) use the "
+                    "latest result, go stale when the model or case changes (release re-solves stale cases) and fail "
+                    "on a quantity that has not converged between the two meshes unless the check sets "
+                    "\"accept_unconverged\": true. Limits: linear elastic, small deflections, rigid supports, bonded "
+                    "faces never slide or separate (no contact, no bolt preload).",
      "inputSchema": _obj({"project": _PROJECT, "case": {"type": "string", "description": "Load case name (fea.json)."},
                           "part": {"type": "string", "description": "Part label (default: the only part)."},
                           "parts": {"type": "array", "items": {"type": "string"},
@@ -2791,9 +2799,12 @@ TOOLS = [
                           "gravity": {"type": "boolean"},
                           "material": {"type": ["string", "object"]},
                           "mesh_size": {"type": "number", "description": "Element size in mm (default from the part)."},
-                          "refine": {"type": "boolean", "description": "Also solve on a finer mesh: default only when "
-                                                                       "the first mesh is small; true forces it, false "
-                                                                       "skips it."},
+                          "refine": {"type": "boolean", "description": "The second mesh that shows convergence: by "
+                                     "default a finer one, or a coarser one when the first is large; true forces the "
+                                     "finer one; false solves once (fea_* checks on that result then fail)."},
+                          "support_margin": {"type": "number", "description": "How far from a support (mm) the "
+                                             "\"away from the supports\" stress starts (default from the part: its "
+                                             "thinnest wall, at most 2/3 of its thinnest dimension)."},
                           "save": {"type": "boolean", "description": "Save the case in fea.json (default true)."},
                           "params": {"type": "object", "description": "What-if parameter overrides: builds a variant "
                                      "and solves it without touching params.json, the saved case or its result."},
